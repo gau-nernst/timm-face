@@ -2,7 +2,7 @@
 
 Turn any [timm](https://github.com/huggingface/pytorch-image-models) models into a face recognition model.
 
-TODO: evaluation, LR schedule, distillation
+TODO: evaluation, EMA, distillation
 
 ## Training
 
