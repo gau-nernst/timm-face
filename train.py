@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from data import InsightFaceBinDataset, InsightFaceRecordIoDataset
+from ema import EMA
 from modelling import TimmFace
 
 
@@ -86,6 +87,7 @@ if __name__ == "__main__":
         backbone_kwargs=args.backbone_kwargs,
         loss_kwargs=args.loss_kwargs,
     ).to(DEVICE)
+    ema = EMA(model)
 
     optim = torch.optim.AdamW(
         model.parameters(),
@@ -121,8 +123,11 @@ if __name__ == "__main__":
 
         step += 1
         pbar.update()
+        ema.update(step)
 
         # TODO: eval and checkpoint
+        if step % args.eval_interval == 0:
+            pass
 
         if step == args.total_steps:
             break
