@@ -1,4 +1,5 @@
 import io
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +13,7 @@ np.bool = bool  # fix for mxnet
 from mxnet.recordio import MXIndexedRecordIO, unpack
 
 
-class InsightFaceDataset(Dataset):
+class InsightFaceRecordIoDataset(Dataset):
     def __init__(self, path: str):
         super().__init__()
         self.path = Path(path)
@@ -43,3 +44,25 @@ class InsightFaceDataset(Dataset):
 
     def __len__(self) -> int:
         return self.size
+
+
+class InsightFaceBinDataset(Dataset):
+    def __init__(self, path: str):
+        super().__init__()
+        self.raw_images, self.labels = pickle.load(open(path, "rb"), encoding="bytes")
+
+        transform_list = [
+            v2.ToImage(),
+            v2.ToDtype(torch.float32, scale=True),
+            v2.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+        ]
+        self.transform = v2.Compose(transform_list)
+
+    def __getitem__(self, idx: int):
+        img = Image.open(io.BytesIO(self.raw_images[idx]))
+        img = self.transform(img)
+        label = int(self.labels[idx])
+        return img, label
+
+    def __len__(self) -> int:
+        return len(self.raw_images)

@@ -3,14 +3,13 @@ import json
 import math
 from pathlib import Path
 
-import timm
 import torch
 import wandb
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data import InsightFaceDataset
-from modelling import build_head
+from data import InsightFaceBinDataset, InsightFaceRecordIoDataset
+from modelling import TimmFace
 
 
 class CosineSchedule:
@@ -31,10 +30,13 @@ class CosineSchedule:
 
 def get_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--model_kwargs", type=json.loads, default=dict())
+    parser.add_argument("--backbone", required=True)
+    parser.add_argument("--backbone_kwargs", type=json.loads, default=dict())
     parser.add_argument("--loss", default="adaface")
+    parser.add_argument("--loss_kwargs", type=json.loads, default=dict())
+
     parser.add_argument("--total_steps", type=int, default=1000)
+    parser.add_argument("--eval_interval", type=int, default=1000)
 
     parser.add_argument("--ds_path", required=True)
     parser.add_argument("--batch_size", type=int, default=64)
@@ -56,7 +58,6 @@ def cycle(dloader: DataLoader):
 
 if __name__ == "__main__":
     DEVICE = "cuda"
-    EMBED_DIM = 512
 
     args = get_parser().parse_args()
     for k, v in vars(args).items():
@@ -65,9 +66,9 @@ if __name__ == "__main__":
     Path("wandb_logs").mkdir(exist_ok=True)
     wandb.init(project="Timm Face", name=args.run_name, config=args, dir="wandb_logs")
 
-    ds = InsightFaceDataset(args.ds_path)
+    train_ds = InsightFaceRecordIoDataset(args.ds_path)
     dloader = DataLoader(
-        ds,
+        train_ds,
         args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
@@ -76,11 +77,18 @@ if __name__ == "__main__":
     )
     dloader = cycle(dloader)
 
-    model = timm.create_model(args.model, num_classes=EMBED_DIM, **args.model_kwargs).to(DEVICE)
-    head = build_head(args.loss, EMBED_DIM, ds.n_classes).to(DEVICE)
+    val_ds_dict = {bin_path.stem: InsightFaceBinDataset(bin_path) for bin_path in Path(args.ds_path).glob("*.bin")}
+
+    model = TimmFace(
+        args.backbone,
+        train_ds.n_classes,
+        args.loss,
+        backbone_kwargs=args.backbone_kwargs,
+        loss_kwargs=args.loss_kwargs,
+    ).to(DEVICE)
 
     optim = torch.optim.AdamW(
-        list(model.parameters()) + list(head.parameters()),
+        model.parameters(),
         lr=args.lr,
         betas=args.betas,
         weight_decay=args.weight_decay,
@@ -88,7 +96,6 @@ if __name__ == "__main__":
     lr_schedule = CosineSchedule(args.lr, args.total_steps)
 
     model.train()
-    head.train()
     step = 0
     pbar = tqdm(total=args.total_steps, dynamic_ncols=True)
 
@@ -99,8 +106,7 @@ if __name__ == "__main__":
 
         # TODO: grad accum
         with torch.autocast("cuda", torch.bfloat16):
-            embs = model(images)
-            loss = head(embs, labels)
+            loss = model(images, labels)
         loss.backward()
 
         if step % 100 == 0:
