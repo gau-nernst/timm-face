@@ -32,7 +32,7 @@ class TimmFace(nn.Module):
 
     def forward(self, imgs: Tensor, labels: Tensor | None = None) -> Tensor:
         embs = self.bn(self.backbone(imgs))
-        return self.loss(embs, self.weight, labels) if self.training else embs
+        return self.loss(embs, self.weight, labels) if self.training else F.normalize(embs, dim=1)
 
 
 class AdaFace(nn.Module):

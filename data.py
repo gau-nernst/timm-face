@@ -59,10 +59,14 @@ class InsightFaceBinDataset(Dataset):
         self.transform = v2.Compose(transform_list)
 
     def __getitem__(self, idx: int):
-        img = Image.open(io.BytesIO(self.raw_images[idx]))
-        img = self.transform(img)
+        img1 = Image.open(io.BytesIO(self.raw_images[2 * idx]))
+        img2 = Image.open(io.BytesIO(self.raw_images[2 * idx + 1]))
+
+        img1 = self.transform(img1)
+        img2 = self.transform(img2)
+
         label = int(self.labels[idx])
-        return img, label
+        return img1, img2, label
 
     def __len__(self) -> int:
-        return len(self.raw_images)
+        return len(self.labels)

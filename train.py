@@ -3,8 +3,11 @@ import json
 import math
 from pathlib import Path
 
+import numpy as np
 import torch
 import wandb
+from sklearn.metrics import accuracy_score, roc_curve
+from sklearn.model_selection import KFold
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -27,6 +30,25 @@ class CosineSchedule:
             progress = (step - self.warmup_steps) / (self.total_steps - self.warmup_steps)
             return self.final_lr + 0.5 * (self.lr - self.final_lr) * (1 + math.cos(progress * math.pi))
         return self.final_lr
+
+
+# adapted from https://github.com/deepinsight/insightface/blob/v0.7/recognition/arcface_torch/eval/verification.py
+def kfold_accuracy(y_true: np.ndarray, y_score: np.ndarray, n_folds: int = 10):
+    kfold = KFold(n_folds)
+    accs = []
+
+    for train_indices, test_indices in kfold.split(np.arange(y_true.shape[0])):
+        y_true_train = y_true[train_indices]
+        y_score_train = y_score[train_indices]
+
+        _, _, thresholds = roc_curve(y_true_train, y_score_train)
+        pred_train = y_score_train >= thresholds[:, None]  # (n_thresholds, fold_size)
+        acc_train = (pred_train == y_true_train).sum(1) / y_true_train.shape[0]
+        optimal_th = thresholds[np.argmax(acc_train)]
+
+        accs.append(accuracy_score(y_true[test_indices], y_score[test_indices] >= optimal_th))
+
+    return np.mean(accs)
 
 
 def get_parser():
@@ -58,7 +80,7 @@ def cycle(dloader: DataLoader):
 
 
 if __name__ == "__main__":
-    DEVICE = "cuda"
+    CHECKPOINT_DIR = Path("checkpoints")
 
     args = get_parser().parse_args()
     for k, v in vars(args).items():
@@ -66,6 +88,10 @@ if __name__ == "__main__":
 
     Path("wandb_logs").mkdir(exist_ok=True)
     wandb.init(project="Timm Face", name=args.run_name, config=args, dir="wandb_logs")
+
+    ckpt_path = CHECKPOINT_DIR / args.run_name
+    assert not ckpt_path.exists()
+    ckpt_path.mkdir(parents=True, exist_ok=True)
 
     train_ds = InsightFaceRecordIoDataset(args.ds_path)
     dloader = DataLoader(
@@ -77,6 +103,7 @@ if __name__ == "__main__":
         drop_last=True,
     )
     dloader = cycle(dloader)
+    print(f"Train dataset: {len(train_ds):,} images, {train_ds.n_classes:,} ids")
 
     val_ds_dict = {bin_path.stem: InsightFaceBinDataset(bin_path) for bin_path in Path(args.ds_path).glob("*.bin")}
 
@@ -86,8 +113,11 @@ if __name__ == "__main__":
         args.loss,
         backbone_kwargs=args.backbone_kwargs,
         loss_kwargs=args.loss_kwargs,
-    ).to(DEVICE)
+    ).to("cuda")
     ema = EMA(model)
+    print("Model parameters:")
+    print(f"  Backbone: {sum(p.numel() for p in model.backbone.parameters()):,}")
+    print(f"  Head: {model.weight.numel():,}")
 
     optim = torch.optim.AdamW(
         model.parameters(),
@@ -112,11 +142,7 @@ if __name__ == "__main__":
         loss.backward()
 
         if step % 100 == 0:
-            log_dict = dict(
-                loss=loss.item(),
-                lr=lr,
-            )
-            wandb.log(log_dict, step=step)
+            wandb.log(dict(loss=loss.item(), lr=lr), step=step)
 
         optim.step()
         optim.zero_grad()
@@ -127,7 +153,35 @@ if __name__ == "__main__":
 
         # TODO: eval and checkpoint
         if step % args.eval_interval == 0:
-            pass
+            ema.eval()
+
+            for val_ds_name, val_ds in val_ds_dict.items():
+                all_labels = []
+                all_scores = []
+
+                val_dloader = DataLoader(val_ds, args.batch_size, num_workers=args.num_workers)
+                for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
+                    all_labels.append(labels.clone().numpy())
+                    with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
+                        embs1 = ema(imgs1.to("cuda"))
+                        embs2 = ema(imgs2.to("cuda"))
+                    all_scores.append((embs1 * embs2).sum(1).float().cpu().numpy())
+
+                all_labels = np.concatenate(all_labels, axis=0)
+                all_scores = np.concatenate(all_scores, axis=0)
+
+                acc = kfold_accuracy(all_labels, all_scores)
+                wandb.log({f"acc/{val_ds_name}": acc}, step=step)
+
+            checkpoint = {
+                "step": step,
+                "model": model.state_dict(),
+                "ema": ema.state_dict(),
+                "optim": optim.state_dict(),
+            }
+            torch.save(checkpoint, ckpt_path / f"step_{step}.pth")
+
+            model.train()
 
         if step == args.total_steps:
             break
