@@ -68,6 +68,8 @@ def get_parser():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-3)
     parser.add_argument("--betas", type=json.loads, default=[0.9, 0.95])
+    parser.add_argument("--warmup", type=float, default=0.05)
+    parser.add_argument("--decay_multiplier", type=float, default=0.01)
 
     parser.add_argument("--run_name", default="debug")
     return parser
@@ -86,9 +88,6 @@ if __name__ == "__main__":
     for k, v in vars(args).items():
         print(f"{k}: {v}")
 
-    Path("wandb_logs").mkdir(exist_ok=True)
-    wandb.init(project="Timm Face", name=args.run_name, config=args, dir="wandb_logs")
-
     ckpt_path = CHECKPOINT_DIR / args.run_name
     assert not ckpt_path.exists()
     ckpt_path.mkdir(parents=True, exist_ok=True)
@@ -102,10 +101,11 @@ if __name__ == "__main__":
         pin_memory=True,
         drop_last=True,
     )
-    dloader = cycle(dloader)
     print(f"Train dataset: {len(train_ds):,} images, {train_ds.n_classes:,} ids")
+    print(f"{args.total_steps / len(dloader):.2f} epochs")
 
-    val_ds_dict = {bin_path.stem: InsightFaceBinDataset(bin_path) for bin_path in Path(args.ds_path).glob("*.bin")}
+    val_ds_paths = list(Path(args.ds_path).glob("*.bin"))
+    val_ds_paths.sort()
 
     model = TimmFace(
         args.backbone,
@@ -125,9 +125,13 @@ if __name__ == "__main__":
         betas=args.betas,
         weight_decay=args.weight_decay,
     )
-    lr_schedule = CosineSchedule(args.lr, args.total_steps)
+    lr_schedule = CosineSchedule(args.lr, args.total_steps, warmup=args.warmup, decay_multiplier=args.decay_multiplier)
+
+    Path("wandb_logs").mkdir(exist_ok=True)
+    wandb.init(project="Timm Face", name=args.run_name, config=args, dir="wandb_logs")
 
     model.train()
+    dloader = cycle(dloader)
     step = 0
     pbar = tqdm(total=args.total_steps, dynamic_ncols=True)
 
@@ -138,11 +142,18 @@ if __name__ == "__main__":
 
         # TODO: grad accum
         with torch.autocast("cuda", torch.bfloat16):
-            loss = model(images, labels)
+            loss, norms = model(images, labels)
         loss.backward()
 
         if step % 100 == 0:
-            wandb.log(dict(loss=loss.item(), lr=lr), step=step)
+            norms = norms.detach()
+            log_dict = dict(
+                loss=loss.item(),
+                lr=lr,
+                norm_hist=wandb.Histogram(norms.cpu().numpy()),
+                norm_mean=norms.mean().item(),
+            )
+            wandb.log(log_dict, step=step)
 
         optim.step()
         optim.zero_grad()
@@ -154,12 +165,16 @@ if __name__ == "__main__":
         # TODO: eval and checkpoint
         if step % args.eval_interval == 0:
             ema.eval()
+            model.eval()
 
-            for val_ds_name, val_ds in val_ds_dict.items():
+            for val_ds_path in val_ds_paths:
+                val_ds_name = val_ds_path.stem
+                val_ds = InsightFaceBinDataset(val_ds_path)
+                val_dloader = DataLoader(val_ds, args.batch_size, num_workers=args.num_workers)
+
                 all_labels = []
                 all_scores = []
 
-                val_dloader = DataLoader(val_ds, args.batch_size, num_workers=args.num_workers)
                 for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
                     all_labels.append(labels.clone().numpy())
                     with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):

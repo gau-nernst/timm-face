@@ -21,18 +21,36 @@ class TimmFace(nn.Module):
         EMBED_DIM = 512
         self.backbone = timm.create_model(backbone, num_classes=EMBED_DIM, **(backbone_kwargs or dict()))
         self.bn = nn.BatchNorm1d(EMBED_DIM, affine=False)  # this is important
-        self.weight = nn.Parameter(torch.empty(n_classes, EMBED_DIM).normal_(0, 0.01))
+        self.weight = nn.Parameter(torch.randn(n_classes, EMBED_DIM))
+        self.weight.data = F.normalize(self.weight.data, dim=1)
 
-        loss_lookup = dict(
-            adaface=AdaFace,
-            arcface=ArcFace,
-            cosface=CosFace,
-        )
+        loss_lookup = dict(adaface=AdaFace, arcface=ArcFace, cosface=CosFace)
         self.loss = loss_lookup[loss](**(loss_kwargs or dict()))
 
     def forward(self, imgs: Tensor, labels: Tensor | None = None) -> Tensor:
         embs = self.bn(self.backbone(imgs))
-        return self.loss(embs, self.weight, labels) if self.training else F.normalize(embs, dim=1)
+        if not self.training:
+            return F.normalize(embs, dim=1)
+
+        norms = torch.linalg.vector_norm(embs, dim=1, keepdim=True)
+        weight, labels = partialfc_sample(self.weight, labels, 16_384)
+        logits = (embs / norms) @ F.normalize(weight, dim=1).T
+
+        return self.loss(logits.float(), norms, labels), norms
+
+
+def partialfc_sample(weight: Tensor, labels: Tensor, n: int) -> tuple[Tensor, Tensor]:
+    positives = torch.unique(labels, sorted=True)
+    if n >= positives.shape[0]:
+        perm = torch.rand(weight.shape[0], device=weight.device)
+        perm[positives] = 2.0
+        indices = torch.topk(perm, k=n)[1]
+        indices = indices.sort()[0]
+    else:
+        indices = positives
+
+    labels = torch.searchsorted(indices, labels)
+    return weight[indices], labels
 
 
 class AdaFace(nn.Module):
@@ -45,14 +63,11 @@ class AdaFace(nn.Module):
         nn.init.constant_(self.norm_normalizer.running_mean, 20.0)
         nn.init.constant_(self.norm_normalizer.running_var, 100.0 * 100.0)
 
-    def forward(self, embs: Tensor, weight: Tensor, labels: Tensor) -> Tensor:
-        norms = torch.linalg.vector_norm(embs, dim=1, keepdim=True)
-        logits = (embs / norms) @ F.normalize(weight, dim=1).T
-
+    def forward(self, logits: Tensor, norms: Tensor, labels: Tensor) -> Tensor:
         margin_scaler = self.norm_normalizer(norms).squeeze(1)
         margin_scaler = (margin_scaler * self.h).clip(-1.0, 1.0)
 
-        theta = logits.float().clamp(-0.999, 0.999).acos()
+        theta = logits.clamp(-0.999, 0.999).acos()
         theta[torch.arange(logits.shape[0]), labels] -= self.m * margin_scaler  # g_angle
         logits = theta.clip(0.0, torch.pi).cos()
 
@@ -66,9 +81,8 @@ class ArcFace(nn.Module):
         self.m = m
         self.s = s
 
-    def forward(self, embs: Tensor, weight: Tensor, labels: Tensor) -> Tensor:
-        logits = F.normalize(embs, dim=1) @ F.normalize(weight, dim=1).T
-        theta = logits.float().clamp(-0.999, 0.999).acos()
+    def forward(self, logits: Tensor, norms: Tensor, labels: Tensor) -> Tensor:
+        theta = logits.clamp(-0.999, 0.999).acos()
         theta[torch.arange(logits.shape[0]), labels] += self.m
         logits = theta.cos()
         return F.cross_entropy(logits * self.s, labels)
@@ -80,8 +94,6 @@ class CosFace(nn.Module):
         self.m = m
         self.s = s
 
-    def forward(self, embs: Tensor, weight: Tensor, labels: Tensor) -> Tensor:
-        logits = F.normalize(embs, dim=1) @ F.normalize(weight, dim=1).T
-        logits = logits.float()
+    def forward(self, logits: Tensor, norms: Tensor, labels: Tensor) -> Tensor:
         logits[torch.arange(logits.shape[0]), labels] -= self.m
         return F.cross_entropy(logits * self.s, labels)
