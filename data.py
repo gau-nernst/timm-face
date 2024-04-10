@@ -13,6 +13,10 @@ np.bool = bool  # fix for mxnet
 from mxnet.recordio import MXIndexedRecordIO, unpack
 
 
+def decode_image(data):
+    return Image.open(io.BytesIO(data))
+
+
 class InsightFaceRecordIoDataset(Dataset):
     def __init__(self, path: str):
         super().__init__()
@@ -38,8 +42,7 @@ class InsightFaceRecordIoDataset(Dataset):
             label = label[0]
         label = int(label)
 
-        img = Image.open(io.BytesIO(raw_img))
-        img = self.transform(img)
+        img = self.transform(decode_image(raw_img))
         return img, label
 
     def __len__(self) -> int:
@@ -59,12 +62,8 @@ class InsightFaceBinDataset(Dataset):
         self.transform = v2.Compose(transform_list)
 
     def __getitem__(self, idx: int):
-        img1 = Image.open(io.BytesIO(self.raw_images[2 * idx]))
-        img2 = Image.open(io.BytesIO(self.raw_images[2 * idx + 1]))
-
-        img1 = self.transform(img1)
-        img2 = self.transform(img2)
-
+        img1 = self.transform(decode_image(self.raw_images[2 * idx]))
+        img2 = self.transform(decode_image(self.raw_images[2 * idx + 1]))
         label = int(self.labels[idx])
         return img1, img2, label
 

@@ -21,8 +21,7 @@ class TimmFace(nn.Module):
         EMBED_DIM = 512
         self.backbone = timm.create_model(backbone, num_classes=EMBED_DIM, **(backbone_kwargs or dict()))
         self.bn = nn.BatchNorm1d(EMBED_DIM, affine=False)  # this is important
-        self.weight = nn.Parameter(torch.randn(n_classes, EMBED_DIM))
-        self.weight.data = F.normalize(self.weight.data, dim=1)
+        self.weight = nn.Parameter(torch.empty(n_classes, EMBED_DIM).normal_(0, 0.01))
 
         loss_lookup = dict(adaface=AdaFace, arcface=ArcFace, cosface=CosFace)
         self.loss = loss_lookup[loss](**(loss_kwargs or dict()))
@@ -32,6 +31,7 @@ class TimmFace(nn.Module):
         if not self.training:
             return F.normalize(embs, dim=1)
 
+        embs = embs.float()  # make sure we calculate norm and do normalize in fp32
         norms = torch.linalg.vector_norm(embs, dim=1, keepdim=True)
         weight, labels = partialfc_sample(self.weight, labels, 16_384)
         logits = (embs / norms) @ F.normalize(weight, dim=1).T
