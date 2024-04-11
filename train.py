@@ -57,6 +57,8 @@ def get_parser():
     parser.add_argument("--backbone_kwargs", type=json.loads, default=dict())
     parser.add_argument("--loss", default="adaface")
     parser.add_argument("--loss_kwargs", type=json.loads, default=dict())
+    parser.add_argument("--channels_last", action="store_true")
+    parser.add_argument("--compile", action="store_true")
 
     parser.add_argument("--total_steps", type=int, default=1000)
     parser.add_argument("--eval_interval", type=int, default=1000)
@@ -131,6 +133,11 @@ if __name__ == "__main__":
     wandb.init(project="Timm Face", name=args.run_name, config=args, dir="wandb_logs")
 
     model.train()
+    if args.channels_last:
+        model.to(memory_format=torch.channels_last)
+    if args.compile:
+        model.backbone.compile(fullgraph=True)
+
     dloader = cycle(dloader)
     step = 0
     pbar = tqdm(total=args.total_steps, dynamic_ncols=True)
@@ -141,17 +148,19 @@ if __name__ == "__main__":
             param_group["lr"] = lr
 
         # TODO: grad accum
+        if args.channels_last:
+            images = images.to(memory_format=torch.channels_last)
         with torch.autocast("cuda", torch.bfloat16):
             loss, norms = model(images, labels)
         loss.backward()
 
         if step % 100 == 0:
-            norms = norms.detach()
+            norms = norms.detach().cpu().numpy()
             log_dict = dict(
                 loss=loss.item(),
                 lr=lr,
-                norm_hist=wandb.Histogram(norms.cpu().numpy()),
-                norm_mean=norms.mean().item(),
+                norm_hist=wandb.Histogram(norms),
+                norm_mean=norms.mean(),
             )
             wandb.log(log_dict, step=step)
 

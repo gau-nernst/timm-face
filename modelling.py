@@ -34,7 +34,7 @@ class TimmFace(nn.Module):
         weight, labels = partialfc_sample(self.weight, labels, 16_384)
         logits = F.normalize(embs, dim=1) @ F.normalize(weight, dim=1).T
 
-        norms = torch.linalg.vector_norm(embs, dim=1)
+        norms = torch.linalg.vector_norm(embs.detach(), dim=1)
         return self.loss(logits.float(), norms, labels), norms
 
 
@@ -62,12 +62,12 @@ class AdaFace(nn.Module):
         self.register_buffer("norm_std", torch.tensor(100.0))
 
     def forward(self, logits: Tensor, norms: Tensor, labels: Tensor) -> Tensor:
-        norms = norms.detach().clip(0.001, 100)
+        norms = norms.clip(0.001, 100)
         std, mean = torch.std_mean(norms)
         self.norm_mean.lerp_(mean, 1e-2)
         self.norm_std.lerp_(std, 1e-2)
 
-        margin_scaler = (norms - self.norm_mean) / (self.norms_std + 1e-3)
+        margin_scaler = (norms - self.norm_mean) / (self.norm_std + 1e-3)
         margin_scaler = (margin_scaler * self.h).clip(-1.0, 1.0)
 
         theta = logits.clamp(-0.999, 0.999).acos()
