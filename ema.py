@@ -46,3 +46,6 @@ class EMA(nn.Module):
 
     def state_dict(self):
         return self.ema_model.state_dict()
+
+    def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
+        return self.ema_model.load_state_dict(state_dict, strict, assign)

@@ -74,6 +74,7 @@ def get_parser():
     parser.add_argument("--decay_multiplier", type=float, default=0.01)
 
     parser.add_argument("--run_name", default="debug")
+    parser.add_argument("--resume")
     return parser
 
 
@@ -140,7 +141,16 @@ if __name__ == "__main__":
 
     dloader = cycle(dloader)
     step = 0
-    pbar = tqdm(total=args.total_steps, dynamic_ncols=True)
+
+    if args.resume is not None:
+        print(f"Resume from {args.resume}")
+        ckpt = torch.load(args.resume)
+        step = ckpt["step"]
+        model.load_state_dict(ckpt["model"])
+        ema.load_state_dict(ckpt["ema"])
+        optim.load_state_dict(ckpt["optim"])
+
+    pbar = tqdm(total=args.total_steps, dynamic_ncols=True, initial=step)
 
     for images, labels in dloader:
         lr = lr_schedule.get_lr(step)
@@ -171,7 +181,6 @@ if __name__ == "__main__":
         pbar.update()
         ema.update(step)
 
-        # TODO: eval and checkpoint
         if step % args.eval_interval == 0:
             ema.eval()
             model.eval()
