@@ -35,7 +35,8 @@ class TimmFace(nn.Module):
         logits = F.normalize(embs, dim=1) @ F.normalize(weight, dim=1).T
 
         norms = torch.linalg.vector_norm(embs.detach(), dim=1)
-        return self.loss(logits.float(), norms, labels), norms
+        loss = self.loss(logits.float(), norms, labels)
+        return loss, norms
 
 
 def partialfc_sample(weight: Tensor, labels: Tensor, n: int) -> tuple[Tensor, Tensor]:
@@ -87,7 +88,7 @@ class ArcFace(nn.Module):
     def forward(self, logits: Tensor, norms: Tensor, labels: Tensor) -> Tensor:
         theta = logits.clamp(-0.999, 0.999).acos()
         theta[torch.arange(logits.shape[0]), labels] += self.m
-        logits = theta.cos()
+        logits = theta.clip(0.0, torch.pi).cos()
         return F.cross_entropy(logits * self.s, labels)
 
 

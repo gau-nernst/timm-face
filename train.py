@@ -1,6 +1,7 @@
 import argparse
 import json
 import math
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -85,15 +86,14 @@ def cycle(dloader: DataLoader):
 
 
 if __name__ == "__main__":
-    CHECKPOINT_DIR = Path("checkpoints")
-
     args = get_parser().parse_args()
     for k, v in vars(args).items():
         print(f"{k}: {v}")
 
-    ckpt_path = CHECKPOINT_DIR / args.run_name
-    assert not ckpt_path.exists()
-    ckpt_path.mkdir(parents=True, exist_ok=True)
+    time_now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    CKPT_DIR = Path("checkpoints") / f"{args.run_name}_{time_now}"
+    assert not CKPT_DIR.exists()
+    CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
     train_ds = InsightFaceRecordIoDataset(args.ds_path)
     dloader = DataLoader(
@@ -212,7 +212,7 @@ if __name__ == "__main__":
                 "ema": ema.state_dict(),
                 "optim": optim.state_dict(),
             }
-            torch.save(checkpoint, ckpt_path / f"step_{step}.pth")
+            torch.save(checkpoint, CKPT_DIR / f"step_{step}.pth")
 
             model.train()
 

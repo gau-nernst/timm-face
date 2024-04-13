@@ -1,10 +1,9 @@
-import io
 import pickle
 from pathlib import Path
 
 import numpy as np
 import torch
-from PIL import Image
+import torchvision as tv
 from torch.utils.data import Dataset
 from torchvision.transforms import v2
 
@@ -14,7 +13,7 @@ from mxnet.recordio import MXIndexedRecordIO, unpack
 
 
 def decode_image(data):
-    return Image.open(io.BytesIO(data))
+    return tv.io.decode_image(torch.frombuffer(data, dtype=torch.uint8))
 
 
 class InsightFaceRecordIoDataset(Dataset):
