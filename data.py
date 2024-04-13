@@ -70,6 +70,7 @@ class InsightFaceRecordIoDataset(Dataset):
 
         transform_list = [
             v2.ToImage(),
+            v2.RandomHorizontalFlip(),
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
         ]
