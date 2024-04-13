@@ -173,7 +173,7 @@ if __name__ == "__main__":
             for val_ds_path in val_ds_paths:
                 val_ds_name = val_ds_path.stem
                 val_ds = InsightFaceBinDataset(val_ds_path)
-                val_dloader = DataLoader(val_ds, args.batch_size, num_workers=args.num_workers)
+                val_dloader = DataLoader(val_ds, args.batch_size, num_workers=args.n_workers)
 
                 all_labels = []
                 all_scores = []
