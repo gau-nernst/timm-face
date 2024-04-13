@@ -2,7 +2,15 @@
 
 Turn any [timm](https://github.com/huggingface/pytorch-image-models) models into a face recognition model.
 
-TODO: evaluation, distillation
+TODO: distillation
+
+## Comparison
+
+Model      | Params     | Dataset    | Loss    | CFP-FP | LFW    | AgeDB-30 | Note
+-----------|------------|------------|---------|--------|--------|----------|-----
+ResNet-101 | 65,150,912 | WebFace12M | AdaFace | 99.21% | 99.82% | 98.00%   | [mk-minchul/AdaFace](https://github.com/mk-minchul/AdaFace)
+ResNet-18  | 24,020,352 | WebFace4M  | AdaFace | 97.06% | 99.50% | 96.25%   | [mk-minchul/AdaFace](https://github.com/mk-minchul/AdaFace)
+ViT/Ti-8   |  5,512,256 | MS1MV3     | CosFace | 94.29% | 99.53% | 94.50%   | This repo (trained from scratch)
 
 ## Training
 
