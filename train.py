@@ -12,7 +12,7 @@ from sklearn.model_selection import KFold
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data import InsightFaceBinDataset, InsightFaceRecordIoDataset
+from data import InsightFaceBinDataset, create_train_dloader
 from ema import EMA
 from modelling import TimmFace
 
@@ -66,7 +66,7 @@ def get_parser():
 
     parser.add_argument("--ds_path", required=True)
     parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--n_workers", type=int, default=4)
 
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-3)
@@ -79,12 +79,6 @@ def get_parser():
     return parser
 
 
-def cycle(dloader: DataLoader):
-    while True:
-        for batch in dloader:
-            yield tuple(x.to("cuda") for x in batch)
-
-
 if __name__ == "__main__":
     args = get_parser().parse_args()
     for k, v in vars(args).items():
@@ -95,24 +89,16 @@ if __name__ == "__main__":
     assert not CKPT_DIR.exists()
     CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
-    train_ds = InsightFaceRecordIoDataset(args.ds_path)
-    dloader = DataLoader(
-        train_ds,
-        args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        drop_last=True,
-    )
-    print(f"Train dataset: {len(train_ds):,} images, {train_ds.n_classes:,} ids")
-    print(f"{args.total_steps / len(dloader):.2f} epochs")
+    dloader, train_size, n_classes = create_train_dloader(args.ds_path, args.batch_size, args.n_workers, device="cuda")
+    print(f"Train dataset: {train_size:,} images, {n_classes:,} ids")
+    print(f"{args.total_steps / (train_size // args.batch_size):.2f} epochs")
 
     val_ds_paths = list(Path(args.ds_path).glob("*.bin"))
     val_ds_paths.sort()
 
     model = TimmFace(
         args.backbone,
-        train_ds.n_classes,
+        n_classes,
         args.loss,
         backbone_kwargs=args.backbone_kwargs,
         loss_kwargs=args.loss_kwargs,
@@ -139,7 +125,6 @@ if __name__ == "__main__":
     if args.compile:
         model.backbone.compile(fullgraph=True)
 
-    dloader = cycle(dloader)
     step = 0
 
     if args.resume is not None:

@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torchvision as tv
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import v2
 
 
@@ -16,6 +16,19 @@ def decode_image(data):
     return tv.io.decode_image(torch.frombuffer(data, dtype=torch.uint8))
 
 
+def cycle(dloader: DataLoader, device: str = "cpu"):
+    while True:
+        for batch in dloader:
+            yield tuple(x.to(device) for x in batch)
+
+
+def create_train_dloader(path: str, batch_size: int, n_workers: int, device: str = "cpu"):
+    ds = InsightFaceRecordIoDataset(path)
+    dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=n_workers, pin_memory=True, drop_last=True)
+    n_classes = int(open(Path(path) / "property").read().split(",")[0])
+    return cycle(dloader, device=device), len(ds), n_classes
+
+
 class InsightFaceRecordIoDataset(Dataset):
     def __init__(self, path: str):
         super().__init__()
@@ -24,7 +37,6 @@ class InsightFaceRecordIoDataset(Dataset):
 
         header, _ = unpack(self.record.read_idx(0))
         self.size = int(header.label[0]) - 1
-        self.n_classes = int(open(self.path / "property").read().split(",")[0])
 
         transform_list = [
             v2.ToImage(),
