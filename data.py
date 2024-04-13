@@ -1,5 +1,7 @@
 import pickle
+import struct
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import torch
@@ -8,8 +10,36 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import v2
 
 
-np.bool = bool  # fix for mxnet
-from mxnet.recordio import MXIndexedRecordIO, unpack
+# drop-in replacement for mxnet.recordio.MXIndexedRecordIO
+class MXIndexedRecordIO:
+    def __init__(self, idx_path: str, rec_path: str, mode: str) -> None:
+        assert mode == "r"
+        index = np.loadtxt(idx_path, dtype=int)
+        self.offsets = torch.empty(index.shape[0], dtype=int)
+        for idx, offset in index:
+            self.offsets[idx] = offset
+        self.rec = np.memmap(rec_path, dtype=np.uint8, mode="r")
+
+    def read_idx(self, idx: int):
+        offset = self.offsets[idx].item()
+        length = self.rec[offset + 4 : offset + 8].view(np.uint32)[0]
+        return self.rec[offset + 8 : offset + 8 + length]
+
+
+class Header(NamedTuple):
+    flag: int
+    label: float | np.ndarray
+    id: int
+    id2: int
+
+
+def unpack(s):
+    flag, label, id, id2 = struct.unpack("IfQQ", s[:24])
+    s = s[24:]
+    if flag > 0:
+        label = s[: flag * 4].view(np.float32)
+        s = s[flag * 4 :]
+    return Header(flag, label, id, id2), s
 
 
 def decode_image(data):
