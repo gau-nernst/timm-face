@@ -71,11 +71,10 @@ class AdaFace(nn.Module):
         margin_scaler = (norms - self.norm_mean) / (self.norm_std + 1e-3)
         margin_scaler = (margin_scaler * self.h).clip(-1.0, 1.0)
 
-        theta = logits.clamp(-0.999, 0.999).acos()
-        theta[torch.arange(logits.shape[0]), labels] -= self.m * margin_scaler  # g_angle
-        logits = theta.clip(0.0, torch.pi).cos()
-
-        logits[torch.arange(logits.shape[0]), labels] -= (1.0 + self.m) * margin_scaler  # g_add
+        positives = logits[torch.arange(logits.shape[0]), labels]
+        theta = positives.clamp(-0.999, 0.999).acos() - self.m * margin_scaler  # g_angle
+        positives = theta.clip(0, torch.pi).cos() - self.m * (1.0 + margin_scaler)  # g_add
+        logits[torch.arange(logits.shape[0]), labels] = positives
         return F.cross_entropy(logits * self.s, labels)
 
 
@@ -86,9 +85,10 @@ class ArcFace(nn.Module):
         self.s = s
 
     def forward(self, logits: Tensor, norms: Tensor, labels: Tensor) -> Tensor:
-        theta = logits.clamp(-0.999, 0.999).acos()
-        theta[torch.arange(logits.shape[0]), labels] += self.m
-        logits = theta.clip(0.0, torch.pi).cos()
+        positives = logits[torch.arange(logits.shape[0]), labels]
+        theta = positives.clamp(-0.999, 0.999).acos() + self.m
+        positives = theta.clip(0.0, torch.pi).cos()
+        logits[torch.arange(logits.shape[0]), labels] = positives
         return F.cross_entropy(logits * self.s, labels)
 
 
