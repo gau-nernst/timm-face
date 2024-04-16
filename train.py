@@ -74,6 +74,7 @@ def get_parser():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-3)
     parser.add_argument("--betas", type=json.loads, default=[0.9, 0.95])
+    parser.add_argument("--clip_grad_norm", type=float)
     parser.add_argument("--warmup", type=float, default=0.05)
     parser.add_argument("--decay_multiplier", type=float, default=0.01)
 
@@ -159,6 +160,13 @@ if __name__ == "__main__":
             loss, norms = model(images, labels)
         loss.backward()
 
+        if args.clip_grad_norm is not None:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+        else:
+            grads = [p.grad.detach() for p in model.parameters() if p.grad is not None]
+            grad_norms = torch._foreach_norm(grads)
+            grad_norm = torch.linalg.vector_norm(torch.stack(grad_norms, dim=0))
+
         if step % 100 == 0:
             norms = norms.detach().cpu().numpy()
             log_dict = dict(
@@ -166,6 +174,7 @@ if __name__ == "__main__":
                 lr=lr,
                 norm_hist=wandb.Histogram(norms),
                 norm_mean=norms.mean(),
+                grad_norm=grad_norm.item(),
             )
             wandb.log(log_dict, step=step)
 
