@@ -67,6 +67,7 @@ def get_parser():
     parser.add_argument("--eval_interval", type=int, default=1000)
 
     parser.add_argument("--ds_path", required=True)
+    parser.add_argument("--augmentations", nargs="+")
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--n_workers", type=int, default=4)
 
@@ -91,7 +92,13 @@ if __name__ == "__main__":
     assert not CKPT_DIR.exists()
     CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
-    dloader, train_size, n_classes = create_train_dloader(args.ds_path, args.batch_size, args.n_workers, device="cuda")
+    dloader, train_size, n_classes = create_train_dloader(
+        args.ds_path,
+        args.batch_size,
+        augmentations=args.augmentations,
+        n_workers=args.n_workers,
+        device="cuda",
+    )
     print(f"Train dataset: {train_size:,} images, {n_classes:,} ids")
     print(f"{args.total_steps / (train_size // args.batch_size):.2f} epochs")
 
