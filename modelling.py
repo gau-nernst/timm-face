@@ -16,10 +16,18 @@ class TimmFace(nn.Module):
         loss: str,
         backbone_kwargs: dict | None = None,
         loss_kwargs: dict | None = None,
+        reduce_first_conv_stride: bool = False,
     ) -> None:
         super().__init__()
         EMBED_DIM = 512
         self.backbone = timm.create_model(backbone, num_classes=EMBED_DIM, **(backbone_kwargs or dict()))
+
+        if reduce_first_conv_stride:
+            first_conv = self.backbone
+            for name in self.backbone.pretrained_cfg["first_conv"].split("."):
+                first_conv = getattr(first_conv, name)
+            first_conv.stride = tuple(s // 2 for s in first_conv.stride)
+
         self.bn = nn.BatchNorm1d(EMBED_DIM, affine=False)  # this is important
         self.weight = nn.Parameter(torch.empty(n_classes, EMBED_DIM).normal_(0, 0.01))
 

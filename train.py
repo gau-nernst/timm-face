@@ -58,6 +58,8 @@ def get_parser():
     parser.add_argument("--backbone_kwargs", type=json.loads, default=dict())
     parser.add_argument("--loss", default="adaface")
     parser.add_argument("--loss_kwargs", type=json.loads, default=dict())
+    parser.add_argument("--reduce_first_conv_stride", action="store_true")
+
     parser.add_argument("--channels_last", action="store_true")
     parser.add_argument("--compile", action="store_true")
 
@@ -102,6 +104,7 @@ if __name__ == "__main__":
         args.loss,
         backbone_kwargs=args.backbone_kwargs,
         loss_kwargs=args.loss_kwargs,
+        reduce_first_conv_stride=args.reduce_first_conv_stride,
     ).to("cuda")
     ema = EMA(model)
     print("Model parameters:")
