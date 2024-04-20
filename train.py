@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import timm.optim
 import torch
 import wandb
 from sklearn.metrics import accuracy_score, roc_curve
@@ -71,9 +72,10 @@ def get_parser():
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--n_workers", type=int, default=4)
 
+    parser.add_argument("--optim", default="AdamW")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-3)
-    parser.add_argument("--betas", type=json.loads, default=[0.9, 0.95])
+    parser.add_argument("--optim_kwargs", type=json.loads)
     parser.add_argument("--clip_grad_norm", type=float)
     parser.add_argument("--warmup", type=float, default=0.05)
     parser.add_argument("--decay_multiplier", type=float, default=0.01)
@@ -119,11 +121,19 @@ if __name__ == "__main__":
     print(f"  Backbone: {sum(p.numel() for p in model.backbone.parameters()):,}")
     print(f"  Head: {model.weight.numel():,}")
 
-    optim = torch.optim.AdamW(
+    if args.optim == "LAMB" and args.clip_grad_norm is not None:
+        print("LAMB already has clip_grad_norm. Make sure this is intended.")
+
+    optim_dict = dict(
+        SGD=torch.optim.SGD,
+        AdamW=torch.optim.AdamW,
+        LAMB=timm.optim.Lamb,
+    )
+    optim = optim_dict[args.optim](
         model.parameters(),
         lr=args.lr,
-        betas=args.betas,
         weight_decay=args.weight_decay,
+        **(args.optim_kwargs or dict()),
     )
     lr_schedule = CosineSchedule(args.lr, args.total_steps, warmup=args.warmup, decay_multiplier=args.decay_multiplier)
 
