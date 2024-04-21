@@ -28,14 +28,13 @@ class TimmFace(nn.Module):
                 first_conv = getattr(first_conv, name)
             first_conv.stride = tuple(s // 2 for s in first_conv.stride)
 
-        self.bn = nn.BatchNorm1d(EMBED_DIM, affine=False)  # this is important
         self.weight = nn.Parameter(torch.empty(n_classes, EMBED_DIM).normal_(0, 0.01))
 
         loss_lookup = dict(adaface=AdaFace, arcface=ArcFace, cosface=CosFace)
         self.loss = loss_lookup[loss](**(loss_kwargs or dict()))
 
     def forward(self, imgs: Tensor, labels: Tensor | None = None) -> Tensor:
-        embs = self.bn(self.backbone(imgs))
+        embs = self.backbone(imgs)
         if not self.training:
             return F.normalize(embs, dim=1)
 
