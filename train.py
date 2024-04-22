@@ -210,9 +210,9 @@ if __name__ == "__main__":
                 for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
                     all_labels.append(labels.clone().numpy())
                     with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
-                        embs1 = ema(imgs1.to("cuda"))
-                        embs2 = ema(imgs2.to("cuda"))
-                    all_scores.append((embs1 * embs2).sum(1).float().cpu().numpy())
+                        embs1 = ema(imgs1.to("cuda")).float()
+                        embs2 = ema(imgs2.to("cuda")).float()
+                    all_scores.append((embs1 * embs2).sum(1).cpu().numpy())
 
                 all_labels = np.concatenate(all_labels, axis=0)
                 all_scores = np.concatenate(all_scores, axis=0)
