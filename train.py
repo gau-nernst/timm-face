@@ -71,6 +71,7 @@ def get_parser():
 
     parser.add_argument("--ds_path", required=True)
     parser.add_argument("--augmentations", nargs="+")
+    parser.add_argument("--val_ds", nargs="+", type=Path)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--n_workers", type=int, default=4)
 
@@ -104,11 +105,14 @@ if __name__ == "__main__":
         n_workers=args.n_workers,
         device="cuda",
     )
-    print(f"Train dataset: {train_size:,} images, {n_classes:,} ids")
+    print(f"Train dataset: {train_size:,} images")
     print(f"{args.total_steps / (train_size // args.batch_size):.2f} epochs")
 
-    val_ds_paths = list(Path(args.ds_path).glob("*.bin"))
-    val_ds_paths.sort()
+    if args.val_ds is None:
+        val_ds_paths = list(Path(args.ds_path).glob("*.bin"))
+        val_ds_paths.sort()
+    else:
+        val_ds_paths = args.val_ds
 
     model = TimmFace(
         args.backbone,
@@ -209,7 +213,7 @@ if __name__ == "__main__":
 
             for val_ds_path in val_ds_paths:
                 val_ds_name = val_ds_path.stem
-                val_ds = InsightFaceBinDataset(val_ds_path)
+                val_ds = InsightFaceBinDataset(str(val_ds_path))
                 val_dloader = DataLoader(val_ds, args.batch_size, num_workers=args.n_workers)
 
                 all_labels = []

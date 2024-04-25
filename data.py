@@ -59,29 +59,47 @@ def create_train_dloader(
     n_workers: int = 4,
     device: str = "cpu",
 ):
-    ds = InsightFaceRecordIoDataset(path, augmentations=augmentations)
-    dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=n_workers, pin_memory=True, drop_last=True)
-    return cycle(dloader, device=device), len(ds)
+    augmentations = augmentations or []
+    transform_list = [
+        v2.ToImage(),
+        v2.RandomHorizontalFlip(),
+        *[eval(aug, dict(v2=v2)) for aug in augmentations],
+        v2.ToDtype(torch.float32, scale=True),
+        v2.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+    ]
+    transform = v2.Compose(transform_list)
+
+    if path.startswith("wds://"):
+        import webdataset as wds
+
+        path = path.removeprefix("wds://")
+        ds = (
+            wds.WebDataset(path, shardshuffle=True)
+            .shuffle(10_000, initial=10_000)
+            .to_tuple("jpg", "cls")
+            .map_tuple(lambda x: transform(decode_image_pt(x)), lambda x: int(x.decode()))
+            .batched(batch_size)
+        )
+        dloader = DataLoader(ds, None, num_workers=n_workers, pin_memory=True)
+        ds_length = float("inf")
+
+    else:
+        ds = InsightFaceRecordIoDataset(path, transform=transform)
+        dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=n_workers, pin_memory=True, drop_last=True)
+        ds_length = len(ds)
+
+    return cycle(dloader, device=device), ds_length
 
 
 class InsightFaceRecordIoDataset(Dataset):
-    def __init__(self, path: str, augmentations: list[str] | None = None):
+    def __init__(self, path: str, transform=None):
         super().__init__()
         self.path = Path(path)
         self.record = MXIndexedRecordIO(str(self.path / "train.idx"), str(self.path / "train.rec"), "r")
 
         header, _ = unpack(self.record.read_idx(0))
         self.size = int(header.label[0]) - 1
-
-        augmentations = augmentations or []
-        transform_list = [
-            v2.ToImage(),
-            v2.RandomHorizontalFlip(),
-            *[eval(aug, dict(v2=v2)) for aug in augmentations],
-            v2.ToDtype(torch.float32, scale=True),
-            v2.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
-        ]
-        self.transform = v2.Compose(transform_list)
+        self.transform = transform
 
     def __getitem__(self, idx: int):
         header, raw_img = unpack(self.record.read_idx(idx + 1))
@@ -91,7 +109,10 @@ class InsightFaceRecordIoDataset(Dataset):
             label = label[0]
         label = int(label)
 
-        img = self.transform(decode_image_pt(raw_img))
+        img = decode_image_pt(raw_img)
+        if self.transform is not None:
+            img = self.transform(img)
+
         return img, label
 
     def __len__(self) -> int:
