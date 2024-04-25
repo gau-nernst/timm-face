@@ -61,8 +61,7 @@ def create_train_dloader(
 ):
     ds = InsightFaceRecordIoDataset(path, augmentations=augmentations)
     dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=n_workers, pin_memory=True, drop_last=True)
-    n_classes = int(open(Path(path) / "property").read().split(",")[0])
-    return cycle(dloader, device=device), len(ds), n_classes
+    return cycle(dloader, device=device), len(ds)
 
 
 class InsightFaceRecordIoDataset(Dataset):
