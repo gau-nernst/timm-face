@@ -101,6 +101,12 @@ class InsightFaceRecordIoDataset(Dataset):
 class InsightFaceBinDataset(Dataset):
     def __init__(self, path: str):
         super().__init__()
+        if path.startswith("hf://"):
+            from huggingface_hub import hf_hub_download
+
+            owner, ds_name, filename = path.removeprefix("hf://").split("/", maxsplit=2)
+            path = hf_hub_download(f"{owner}/{ds_name}", filename, repo_type="dataset")
+
         self.raw_images, self.labels = pickle.load(open(path, "rb"), encoding="bytes")
 
         transform_list = [
