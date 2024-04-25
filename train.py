@@ -61,6 +61,7 @@ def get_parser():
     parser.add_argument("--loss_kwargs", type=json.loads, default=dict())
     parser.add_argument("--reduce_first_conv_stride", action="store_true")
 
+    parser.add_argument("--amp_dtype", choices=["bfloat16", "float16", "none"], default="bfloat16")
     parser.add_argument("--channels_last", action="store_true")
     parser.add_argument("--compile", action="store_true")
 
@@ -137,6 +138,10 @@ if __name__ == "__main__":
     )
     lr_schedule = CosineSchedule(args.lr, args.total_steps, warmup=args.warmup, decay_multiplier=args.decay_multiplier)
 
+    amp_dtype = dict(bfloat16=torch.bfloat16, float16=torch.float16, none=None)[args.amp_dtype]
+    amp_enabled = amp_dtype is not None
+    grad_scaler = torch.cuda.amp.GradScaler(enabled=amp_dtype is torch.float16)
+
     Path("wandb_logs").mkdir(exist_ok=True)
     wandb.init(project="Timm Face", name=args.run_name, config=args, dir="wandb_logs")
 
@@ -166,10 +171,11 @@ if __name__ == "__main__":
         # TODO: grad accum
         if args.channels_last:
             images = images.to(memory_format=torch.channels_last)
-        with torch.autocast("cuda", torch.bfloat16):
+        with torch.autocast("cuda", amp_dtype, amp_enabled):
             loss, norms = model(images, labels)
-        loss.backward()
+        grad_scaler.scale(loss).backward()
 
+        grad_scaler.unscale_(optim)
         if args.clip_grad_norm is not None:
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
         else:
@@ -188,7 +194,8 @@ if __name__ == "__main__":
             )
             wandb.log(log_dict, step=step)
 
-        optim.step()
+        grad_scaler.step(optim)
+        grad_scaler.update()
         optim.zero_grad()
 
         step += 1
@@ -209,7 +216,7 @@ if __name__ == "__main__":
 
                 for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
                     all_labels.append(labels.clone().numpy())
-                    with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
+                    with torch.no_grad(), torch.autocast("cuda", amp_dtype, amp_enabled):
                         embs1 = ema(imgs1.to("cuda")).float()
                         embs2 = ema(imgs2.to("cuda")).float()
                     all_scores.append((embs1 * embs2).sum(1).cpu().numpy())
