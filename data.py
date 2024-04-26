@@ -79,7 +79,7 @@ def create_train_dloader(
 
         path = path.removeprefix("wds://")
         ds = (
-            wds.WebDataset(path, shardshuffle=True)
+            wds.WebDataset(path, shardshuffle=True, nodesplitter=wds.split_by_node)
             .shuffle(10_000, initial=10_000)
             .to_tuple("jpg", "cls")
             .map_tuple(lambda x: transform(decode_image_pt(x)), lambda x: int(x.decode()))
