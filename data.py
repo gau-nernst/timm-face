@@ -1,5 +1,6 @@
 import pickle
 import struct
+import warnings
 from pathlib import Path
 from typing import NamedTuple
 
@@ -8,6 +9,10 @@ import torch
 import torchvision as tv
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import v2
+
+
+# suppress PyTorch's complaint
+warnings.filterwarnings("ignore", message="The given buffer is not writable", category=UserWarning)
 
 
 # drop-in replacement for mxnet.recordio.MXIndexedRecordIO
