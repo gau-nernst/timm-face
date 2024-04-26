@@ -227,42 +227,44 @@ if __name__ == "__main__":
 
         step += 1
         pbar.update()
-        ema.update(step)
 
-        if is_rank0 and step % args.eval_interval == 0:
-            ema.eval()
-            model.eval()
+        if is_rank0:
+            ema.update(step)
 
-            for val_ds_path in val_ds_paths:
-                val_ds_name = val_ds_path.stem
-                val_ds = InsightFaceBinDataset(str(val_ds_path))
-                val_dloader = DataLoader(val_ds, args.batch_size, num_workers=args.n_workers)
+            if step % args.eval_interval == 0:
+                ema.eval()
+                model.eval()
 
-                all_labels = []
-                all_scores = []
+                for val_ds_path in val_ds_paths:
+                    val_ds_name = val_ds_path.stem
+                    val_ds = InsightFaceBinDataset(str(val_ds_path))
+                    val_dloader = DataLoader(val_ds, args.batch_size, num_workers=args.n_workers)
 
-                for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
-                    all_labels.append(labels.clone().numpy())
-                    with torch.no_grad(), torch.autocast("cuda", amp_dtype, amp_enabled):
-                        embs1 = ema(imgs1.to("cuda")).float()
-                        embs2 = ema(imgs2.to("cuda")).float()
-                    all_scores.append((embs1 * embs2).sum(1).cpu().numpy())
+                    all_labels = []
+                    all_scores = []
 
-                all_labels = np.concatenate(all_labels, axis=0)
-                all_scores = np.concatenate(all_scores, axis=0)
+                    for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
+                        all_labels.append(labels.clone().numpy())
+                        with torch.no_grad(), torch.autocast("cuda", amp_dtype, amp_enabled):
+                            embs1 = ema(imgs1.to("cuda")).float()
+                            embs2 = ema(imgs2.to("cuda")).float()
+                        all_scores.append((embs1 * embs2).sum(1).cpu().numpy())
 
-                acc = kfold_accuracy(all_labels, all_scores)
-                wandb.log({f"acc/{val_ds_name}": acc}, step=step)
+                    all_labels = np.concatenate(all_labels, axis=0)
+                    all_scores = np.concatenate(all_scores, axis=0)
 
-            checkpoint = {
-                "step": step,
-                "model": model.state_dict(),
-                "ema": ema.state_dict(),
-                "optim": optim.state_dict(),
-            }
-            torch.save(checkpoint, CKPT_DIR / f"step_{step}.pth")
+                    acc = kfold_accuracy(all_labels, all_scores)
+                    wandb.log({f"acc/{val_ds_name}": acc}, step=step)
 
-            model.train()
+                checkpoint = {
+                    "step": step,
+                    "model": model.state_dict(),
+                    "ema": ema.state_dict(),
+                    "optim": optim.state_dict(),
+                }
+                torch.save(checkpoint, CKPT_DIR / f"step_{step}.pth")
+
+                model.train()
 
         if step == args.total_steps:
             break
