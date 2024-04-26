@@ -1,5 +1,6 @@
 import pickle
 import struct
+import warnings
 from pathlib import Path
 from typing import NamedTuple
 
@@ -8,6 +9,10 @@ import torch
 import torchvision as tv
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import v2
+
+
+# suppress PyTorch's complaint
+warnings.filterwarnings("ignore", message="The given buffer is not writable", category=UserWarning)
 
 
 # drop-in replacement for mxnet.recordio.MXIndexedRecordIO
@@ -74,11 +79,11 @@ def create_train_dloader(
 
         path = path.removeprefix("wds://")
         ds = (
-            wds.WebDataset(path, shardshuffle=True)
+            wds.WebDataset(path, shardshuffle=True, nodesplitter=wds.split_by_node)
             .shuffle(10_000, initial=10_000)
             .to_tuple("jpg", "cls")
             .map_tuple(lambda x: transform(decode_image_pt(x)), lambda x: int(x.decode()))
-            .batched(batch_size)
+            .batched(batch_size, partial=False)
         )
         dloader = DataLoader(ds, None, num_workers=n_workers, pin_memory=True)
         ds_length = float("inf")

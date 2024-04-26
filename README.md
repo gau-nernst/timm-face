@@ -40,3 +40,11 @@ ConvNeXt-Atto CosFace. Trained on MS1MV3 for 30 epochs.
 ```bash
 python train.py --backbone convnext_atto --backbone_kwargs '{"patch_size":2}' --ds_path ms1m-retinaface-t1 --batch_size 768 --total_steps 200_000 --lr 1e-3 --weight_decay 1e-1 --clip_grad_norm 1 --run_name convnext_atto_cosface --eval_interval 10_000 --loss cosface --channels_last --compile
 ```
+
+For DDP, replace `python` with `torchrun`. E.g. single-node 4 GPUs
+
+```bash
+torchrun --standalone --nproc-per-node=4 train.py --backbone convnext_atto --backbone_kwargs '{"patch_size":2}' --ds_path ms1m-retinaface-t1 --batch_size 768 --total_steps 200_000 --lr 1e-3 --weight_decay 1e-1 --clip_grad_norm 1 --run_name convnext_atto_cosface --eval_interval 10_000 --loss cosface --channels_last --compile
+```
+
+For more information, see [torchrun](https://pytorch.org/docs/stable/elastic/run.html)
