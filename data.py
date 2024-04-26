@@ -78,7 +78,7 @@ def create_train_dloader(
             .shuffle(10_000, initial=10_000)
             .to_tuple("jpg", "cls")
             .map_tuple(lambda x: transform(decode_image_pt(x)), lambda x: int(x.decode()))
-            .batched(batch_size)
+            .batched(batch_size, partial=False)
         )
         dloader = DataLoader(ds, None, num_workers=n_workers, pin_memory=True)
         ds_length = float("inf")
