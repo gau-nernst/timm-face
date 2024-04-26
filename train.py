@@ -1,6 +1,7 @@
 import argparse
 import json
 import math
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -90,13 +91,33 @@ def get_parser():
 
 if __name__ == "__main__":
     args = get_parser().parse_args()
-    for k, v in vars(args).items():
-        print(f"{k}: {v}")
 
-    time_now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    CKPT_DIR = Path("checkpoints") / f"{args.run_name}_{time_now}"
-    assert not CKPT_DIR.exists()
-    CKPT_DIR.mkdir(parents=True, exist_ok=True)
+    # https://pytorch.org/tutorials/intermediate/ddp_tutorial.html
+    # https://pytorch.org/docs/stable/elastic/run.html
+    is_ddp = os.environ.get("RANK") is not None
+    if is_ddp:
+        import torch.distributed as dist
+        from torch.nn.parallel import DistributedDataParallel as DDP
+
+        dist.init_process_group("nccl")
+        local_rank = int(os.environ["LOCAL_RANK"])
+        is_rank0 = int(os.environ["RANK"]) == 0
+        torch.cuda.set_device(local_rank)
+
+    else:
+        is_rank0 = True
+
+    if is_rank0:
+        for k, v in vars(args).items():
+            print(f"{k}: {v}")
+
+        time_now = datetime.now().strftime("%Y%m%d_%H%M%S")
+        CKPT_DIR = Path("checkpoints") / f"{args.run_name}_{time_now}"
+        assert not CKPT_DIR.exists()
+        CKPT_DIR.mkdir(parents=True, exist_ok=True)
+
+        Path("wandb_logs").mkdir(exist_ok=True)
+        wandb.init(project="Timm Face", name=args.run_name, config=args, dir="wandb_logs")
 
     dloader, train_size = create_train_dloader(
         args.ds_path,
@@ -105,14 +126,10 @@ if __name__ == "__main__":
         n_workers=args.n_workers,
         device="cuda",
     )
-    print(f"Train dataset: {train_size:,} images")
-    print(f"{args.total_steps / (train_size // args.batch_size):.2f} epochs")
-
-    if args.val_ds is None:
-        val_ds_paths = list(Path(args.ds_path).glob("*.bin"))
-        val_ds_paths.sort()
-    else:
-        val_ds_paths = args.val_ds
+    if is_rank0:
+        print(f"Train dataset: {train_size:,} images")
+        print(f"{args.total_steps / (train_size // args.batch_size):.2f} epochs")
+        val_ds_paths = sorted(Path(args.ds_path).glob("*.bin")) if args.val_ds is None else args.val_ds
 
     model = TimmFace(
         args.backbone,
@@ -122,13 +139,18 @@ if __name__ == "__main__":
         loss_kwargs=args.loss_kwargs,
         reduce_first_conv_stride=args.reduce_first_conv_stride,
     ).to("cuda")
-    ema = EMA(model)
-    print("Model parameters:")
-    print(f"  Backbone: {sum(p.numel() for p in model.backbone.parameters()):,}")
-    print(f"  Head: {model.weight.numel():,}")
+    if args.channels_last:
+        model.to(memory_format=torch.channels_last)
+    if args.compile:
+        model.backbone.compile(fullgraph=True)
+    if is_rank0:
+        ema = EMA(model)
+        print("Model parameters:")
+        print(f"  Backbone: {sum(p.numel() for p in model.backbone.parameters()):,}")
+        print(f"  Head: {model.weight.numel():,}")
 
-    if args.optim == "LAMB" and args.clip_grad_norm is not None:
-        print("LAMB already has clip_grad_norm. Make sure this is intended.")
+        if args.optim == "LAMB" and args.clip_grad_norm is not None:
+            print("LAMB already has clip_grad_norm. Make sure this is intended.")
 
     optim_dict = dict(
         SGD=torch.optim.SGD,
@@ -147,18 +169,9 @@ if __name__ == "__main__":
     amp_enabled = amp_dtype is not None
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp_dtype is torch.float16)
 
-    Path("wandb_logs").mkdir(exist_ok=True)
-    wandb.init(project="Timm Face", name=args.run_name, config=args, dir="wandb_logs")
-
-    model.train()
-    if args.channels_last:
-        model.to(memory_format=torch.channels_last)
-    if args.compile:
-        model.backbone.compile(fullgraph=True)
-
     step = 0
 
-    if args.resume is not None:
+    if args.resume is not None and is_rank0:
         print(f"Resume from {args.resume}")
         ckpt = torch.load(args.resume)
         step = ckpt["step"]
@@ -166,7 +179,16 @@ if __name__ == "__main__":
         ema.load_state_dict(ckpt["ema"])
         optim.load_state_dict(ckpt["optim"])
 
-    pbar = tqdm(total=args.total_steps, dynamic_ncols=True, initial=step)
+    if is_ddp:
+        # this will broadcast weights to other processes at init
+        model = DDP(model, device_ids=[local_rank], broadcast_buffers=False)
+
+        step_tensor = torch.tensor(step, device="cuda")
+        dist.broadcast(step_tensor, 0)
+        step = step_tensor.item()
+
+    pbar = tqdm(total=args.total_steps, dynamic_ncols=True, initial=step, disable=not is_rank0)
+    model.train()
 
     for images, labels in dloader:
         lr = lr_schedule.get_lr(step)
@@ -188,7 +210,7 @@ if __name__ == "__main__":
             grad_norms = torch._foreach_norm(grads)
             grad_norm = torch.linalg.vector_norm(torch.stack(grad_norms, dim=0))
 
-        if step % 100 == 0:
+        if is_rank0 and step % 100 == 0:
             norms = norms.detach().cpu().numpy()
             log_dict = dict(
                 loss=loss.item(),
@@ -207,7 +229,7 @@ if __name__ == "__main__":
         pbar.update()
         ema.update(step)
 
-        if step % args.eval_interval == 0:
+        if is_rank0 and step % args.eval_interval == 0:
             ema.eval()
             model.eval()
 
@@ -244,3 +266,6 @@ if __name__ == "__main__":
 
         if step == args.total_steps:
             break
+
+    if ddp:
+        dist.destroy_process_group()
