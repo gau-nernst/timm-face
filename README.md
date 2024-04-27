@@ -48,3 +48,11 @@ torchrun --standalone --nproc-per-node=4 train.py --backbone convnext_atto --bac
 ```
 
 For more information, see [torchrun](https://pytorch.org/docs/stable/elastic/run.html)
+
+## Notes
+
+Some good papers for training ViT
+- MoCov3: https://arxiv.org/abs/2104.02057
+- AugReg: https://arxiv.org/pdf/2106.10270
+- DeiT3: https://arxiv.org/abs/2204.07118
+- Tuned recipe by Lucas Beyer: https://arxiv.org/abs/2205.01580
