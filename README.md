@@ -30,19 +30,19 @@ Download a dataset from `https://github.com/deepinsight/insightface/tree/master/
 ViT/Ti-8 CosFace. Trained on MS1MV3 for 30 epochs. 12hrs on 1x 4070 Ti SUPER. Change loss to `arcface` or `adaface` to get other variants.
 
 ```bash
-python train.py --backbone vit_tiny_patch16_224 --backbone_kwargs '{"patch_size":8,"img_size":112}' --ds_path ms1m-retinaface-t1 --batch_size 768 --total_steps 200_000 --lr 1e-3 --weight_decay 1e-1 --clip_grad_norm 1 --run_name vit_tiny_cosface --eval_interval 10_000 --loss cosface --compile
+python train.py --backbone vit_tiny_patch16_224 --backbone_kwargs '{"patch_size":8,"img_size":112}' --partial_fc 16_384 --ds_path ms1m-retinaface-t1 --batch_size 768 --total_steps 200_000 --lr 1e-3 --weight_decay 1e-1 --clip_grad_norm 1 --run_name vit_tiny_cosface --eval_interval 10_000 --loss cosface --compile
 ```
 
 ConvNeXt-Nano CosFace. Trained on MS1MV3 for 30 epochs.
 
 ```bash
-python train.py --backbone convnext_nano --backbone_kwargs '{"patch_size":2,"drop_path_rate":0.1}' --ds_path ms1m-retinaface-t1 --batch_size 768 --total_steps 200_000 --lr 1e-3 --weight_decay 1e-1 --warmup 0.1 --clip_grad_norm 1 --run_name convnext_nano_cosface --eval_interval 10_000 --loss cosface --channels_last --compile --augmentations "v2.RandomChoice([v2.ColorJitter(0.1,0.1,0.1,0.1), v2.RandomAffine(0,(0.1,0.1))])"
+python train.py --backbone convnext_nano --backbone_kwargs '{"patch_size":2,"drop_path_rate":0.1}' --partial_fc 16_384 --ds_path ms1m-retinaface-t1 --batch_size 768 --total_steps 200_000 --lr 1e-3 --weight_decay 1e-1 --warmup 0.1 --clip_grad_norm 1 --run_name convnext_nano_cosface --eval_interval 10_000 --loss cosface --channels_last --compile --augmentations "v2.RandomChoice([v2.ColorJitter(0.1,0.1,0.1,0.1), v2.RandomAffine(0,(0.1,0.1))])"
 ```
 
 ConvNeXt-Atto CosFace. Trained on MS1MV3 for 30 epochs.
 
 ```bash
-python train.py --backbone convnext_atto --backbone_kwargs '{"patch_size":2}' --ds_path ms1m-retinaface-t1 --batch_size 768 --total_steps 200_000 --lr 1e-3 --weight_decay 1e-1 --clip_grad_norm 1 --run_name convnext_atto_cosface --eval_interval 10_000 --loss cosface --channels_last --compile
+python train.py --backbone convnext_atto --backbone_kwargs '{"patch_size":2}' --partial_fc 16_384 --ds_path ms1m-retinaface-t1 --batch_size 768 --total_steps 200_000 --lr 1e-3 --weight_decay 1e-1 --clip_grad_norm 1 --run_name convnext_atto_cosface --eval_interval 10_000 --loss cosface --channels_last --compile
 ```
 
 For DDP, replace `python` with `torchrun`. E.g. single-node 4 GPUs

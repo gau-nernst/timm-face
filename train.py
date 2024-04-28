@@ -59,9 +59,10 @@ def get_parser():
     parser.add_argument("--backbone", required=True)
     parser.add_argument("--backbone_kwargs", type=json.loads, default=dict())
     parser.add_argument("--n_classes", type=int, default=93_431)  # MS1MV3
-    parser.add_argument("--loss", default="adaface")
+    parser.add_argument("--loss", default="cosface")
     parser.add_argument("--loss_kwargs", type=json.loads, default=dict())
     parser.add_argument("--reduce_first_conv_stride", action="store_true")
+    parser.add_argument("--partial_fc", type=int, default=0)
 
     parser.add_argument("--amp_dtype", choices=["bfloat16", "float16", "none"], default="bfloat16")
     parser.add_argument("--channels_last", action="store_true")
@@ -145,6 +146,7 @@ if __name__ == "__main__":
         backbone_kwargs=args.backbone_kwargs,
         loss_kwargs=args.loss_kwargs,
         reduce_first_conv_stride=args.reduce_first_conv_stride,
+        partial_fc=args.partial_fc,
     ).to("cuda")
     if args.channels_last:
         model.to(memory_format=torch.channels_last)
@@ -274,5 +276,5 @@ if __name__ == "__main__":
 
                 model.train()
 
-    if ddp:
+    if is_ddp:
         dist.destroy_process_group()

@@ -17,6 +17,7 @@ class TimmFace(nn.Module):
         backbone_kwargs: dict | None = None,
         loss_kwargs: dict | None = None,
         reduce_first_conv_stride: bool = False,
+        partial_fc: int = 0,
     ) -> None:
         super().__init__()
         EMBED_DIM = 512
@@ -32,13 +33,17 @@ class TimmFace(nn.Module):
 
         loss_lookup = dict(adaface=AdaFace, arcface=ArcFace, cosface=CosFace)
         self.loss = loss_lookup[loss](**(loss_kwargs or dict()))
+        self.partial_fc = partial_fc
 
     def forward(self, imgs: Tensor, labels: Tensor | None = None) -> Tensor:
         embs = self.backbone(imgs)
         if not self.training:
             return F.normalize(embs, dim=1)
 
-        weight, labels = partialfc_sample(self.weight, labels, 16_384)
+        if self.partial_fc > 0:
+            weight, labels = partialfc_sample(self.weight, labels, self.partial_fc)
+        else:
+            weight = self.weight
         logits = F.normalize(embs, dim=1) @ F.normalize(weight, dim=1).T
 
         norms = torch.linalg.vector_norm(embs.detach(), dim=1)
