@@ -83,6 +83,7 @@ def get_parser():
     parser.add_argument("--clip_grad_norm", type=float)
     parser.add_argument("--warmup", type=float, default=0.05)
     parser.add_argument("--decay_multiplier", type=float, default=0.01)
+    parser.add_argument("--grad_accum", type=int, default=1)
 
     parser.add_argument("--run_name", default="debug")
     parser.add_argument("--resume")
@@ -104,8 +105,13 @@ if __name__ == "__main__":
         is_rank0 = int(os.environ["RANK"]) == 0
         torch.cuda.set_device(local_rank)
 
+        world_size = int(os.environ["WORLD_SIZE"])
+        assert args.batch_size % world_size == 0
+        batch_size = args.batch_size // world_size
+
     else:
         is_rank0 = True
+        batch_size = args.batch_size
 
     if is_rank0:
         for k, v in vars(args).items():
@@ -119,9 +125,10 @@ if __name__ == "__main__":
         Path("wandb_logs").mkdir(exist_ok=True)
         wandb.init(project="Timm Face", name=args.run_name, config=args, dir="wandb_logs")
 
+    assert batch_size % args.grad_accum == 0
     dloader, train_size = create_train_dloader(
         args.ds_path,
-        args.batch_size,
+        batch_size // args.grad_accum,
         augmentations=args.augmentations,
         n_workers=args.n_workers,
         device="cuda",
@@ -190,17 +197,18 @@ if __name__ == "__main__":
     pbar = tqdm(total=args.total_steps, dynamic_ncols=True, initial=step, disable=not is_rank0)
     model.train()
 
-    for images, labels in dloader:
+    while step < args.total_steps:
         lr = lr_schedule.get_lr(step)
         for param_group in optim.param_groups:
             param_group["lr"] = lr
 
-        # TODO: grad accum
-        if args.channels_last:
-            images = images.to(memory_format=torch.channels_last)
-        with torch.autocast("cuda", amp_dtype, amp_enabled):
-            loss, norms = model(images, labels)
-        grad_scaler.scale(loss).backward()
+        for _ in range(args.grad_accum):
+            images, labels = next(dloader)
+            if args.channels_last:
+                images = images.to(memory_format=torch.channels_last)
+            with torch.autocast("cuda", amp_dtype, amp_enabled):
+                loss, norms = model(images, labels)
+            grad_scaler.scale(loss / args.grad_accum).backward()
 
         grad_scaler.unscale_(optim)
         if args.clip_grad_norm is not None:
@@ -265,9 +273,6 @@ if __name__ == "__main__":
                 torch.save(checkpoint, CKPT_DIR / f"step_{step}.pth")
 
                 model.train()
-
-        if step == args.total_steps:
-            break
 
     if ddp:
         dist.destroy_process_group()
