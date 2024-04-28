@@ -49,8 +49,9 @@ class IJBDataset(Dataset):
         img = Image.open(self.img_dir / f"{idx+1}.jpg").convert("RGB")
         kpts = self.keypoints_list[idx]
 
-        M, _ = cv2.estimateAffinePartial2D(kpts, self.ARCFACE_KEYPOINTS, ransacReprojThreshold=10)
-        img = cv2.warpAffine(np.array(img), M, (112, 112))
+        # set ransacReprojThreshold=float("inf") so that all points are inliers
+        M, _ = cv2.estimateAffinePartial2D(kpts, self.ARCFACE_KEYPOINTS, ransacReprojThreshold=float("inf"))
+        img = cv2.warpAffine(np.array(img), M, (112, 112), flags=cv2.INTER_CUBIC)
         img = self.transform(img)
         return img
 
