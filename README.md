@@ -6,18 +6,22 @@ TODO: distillation
 
 ## Comparison
 
-Model       | Params     | Dataset    | Loss    | CFP-FP | LFW    | AgeDB-30 | Source
-------------|------------|------------|---------|--------|--------|----------|-------
-iResNet-101 | 65,150,912 | WebFace12M | AdaFace | 99.21% | 99.82% | 98.00%   | [mk-minchul/AdaFace](https://github.com/mk-minchul/AdaFace)
-iResNet-18  | 24,020,352 | WebFace4M  | AdaFace | 97.06% | 99.50% | 96.25%   | [mk-minchul/AdaFace](https://github.com/mk-minchul/AdaFace)
-GhostFaceNetV1 (S1) | 4,088,812 | MS1MV3 | ArcFace | 97.06% | 99.53% | 97.13% | [HamadYA/GhostFaceNets](https://github.com/HamadYA/GhostFaceNets)
-[ViT/Ti-8](https://huggingface.co/gaunernst/vit_tiny_patch8_112.cosface_ms1mv3) |  5,512,640 | MS1MV3 | CosFace | 96.44% | 99.77% | 97.23% | This repo
-[ViT/Ti-8](https://huggingface.co/gaunernst/vit_tiny_patch8_112.arcface_ms1mv3) |  5,512,640 | MS1MV3 | ArcFace | 96.91% | 99.67% | 97.17% | This repo
-[ViT/Ti-8](https://huggingface.co/gaunernst/vit_tiny_patch8_112.adaface_ms1mv3) |  5,512,640 | MS1MV3 | AdaFace | 96.19% | 99.75% | 97.00% | This repo
-[ConvNeXt-Nano](https://huggingface.co/gaunernst/convnext_nano.cosface_ms1mv3) | 15,303,712 | MS1MV3 | CosFace | 97.94% | 99.67% | 97.58% | This repo
-[ConvNeXt-Atto](https://huggingface.co/gaunernst/convnext_atto.cosface_ms1mv3) |  3,543,952 | MS1MV3 | CosFace | 96.33% | 99.68% | 96.90% | This repo
+For CFP-FP, LFW, AgeDB-30, metric is 10-fold accuracy. For IJB-B and IJB-C, metric is TAR@FAR=1e-4
 
-TODO: add IJB-B, IJB-C
+Model       | Params     | Dataset    | Loss    | CFP-FP | LFW    | AgeDB-30 | IJB-B | IJB-C | Source
+------------|------------|------------|---------|--------|--------|----------|-------|-------|-------
+iResNet-101 | 65,150,912 | WebFace12M | AdaFace | 99.21% | 99.82% | 98.00%   |       |       | [mk-minchul/AdaFace](https://github.com/mk-minchul/AdaFace)
+iResNet-18  | 24,020,352 | WebFace4M  | AdaFace | 97.06% | 99.50% | 96.25%   |       |       | [mk-minchul/AdaFace](https://github.com/mk-minchul/AdaFace)
+iResNet-101 | 65,150,912 | Glint360k  | CosFace |        |        |          |       |       | [deepinsight/insightface](https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch)
+iResNet-18  | 24,020,352 | Glint360k  | CosFace |        |        |          |       |       | [deepinsight/insightface](https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch)
+iResNet-101 | 65,150,912 | MS1MV3     | ArcFace |        |        |          |       |       | [deepinsight/insightface](https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch)
+iResNet-18  | 24,020,352 | MS1MV3     | ArcFace |        |        |          |       |       | [deepinsight/insightface](https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch)
+GhostFaceNetV1 (S1) | 4,088,812 | MS1MV3 | ArcFace | 97.06% | 99.53% | 97.13% | | | [HamadYA/GhostFaceNets](https://github.com/HamadYA/GhostFaceNets)
+[ViT/Ti-8](https://huggingface.co/gaunernst/vit_tiny_patch8_112.cosface_ms1mv3) |  5,512,640 | MS1MV3 | CosFace | 96.44% | 99.77% | 97.23% | 90.36% | 92.43% | This repo
+[ViT/Ti-8](https://huggingface.co/gaunernst/vit_tiny_patch8_112.arcface_ms1mv3) |  5,512,640 | MS1MV3 | ArcFace | 96.91% | 99.67% | 97.17% | 88.74% | 90.79% | This repo
+[ViT/Ti-8](https://huggingface.co/gaunernst/vit_tiny_patch8_112.adaface_ms1mv3) |  5,512,640 | MS1MV3 | AdaFace | 96.19% | 99.75% | 97.00% | 89.30% | 91.58% | This repo
+[ConvNeXt-Nano](https://huggingface.co/gaunernst/convnext_nano.cosface_ms1mv3)  | 15,303,712 | MS1MV3 | CosFace | 97.94% | 99.67% | 97.58% | 92.93% | 94.79% | This repo
+[ConvNeXt-Atto](https://huggingface.co/gaunernst/convnext_atto.cosface_ms1mv3)  |  3,543,952 | MS1MV3 | CosFace | 96.33% | 99.68% | 96.90% | 88.57% | 90.94% | This repo
 
 ## Training
 
@@ -48,6 +52,14 @@ torchrun --standalone --nproc-per-node=4 train.py --backbone convnext_atto --bac
 ```
 
 For more information, see [torchrun](https://pytorch.org/docs/stable/elastic/run.html)
+
+## Evaluation
+
+For IJB-B and IJB-C, download dataset and metadata from `https://github.com/deepinsight/insightface/tree/master/recognition/_evaluation_/ijb`. Then run the following command
+
+```bash
+python test_ijb.py --dataset IJBC --model "hf_hub:gaunernst/vit_tiny_patch8_112.cosface_ms1mv3" --model_kwargs '{"pretrained":true}'
+```
 
 ## Notes
 
