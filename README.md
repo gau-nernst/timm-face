@@ -8,12 +8,12 @@ TODO: distillation
 
 For CFP-FP, LFW, AgeDB-30, metric is 10-fold accuracy. For IJB-B and IJB-C, metric is TAR@FAR=1e-4
 
-Model       | Params     | Dataset    | Loss    | CFP-FP | LFW    | AgeDB-30 | IJB-B | IJB-C | Source
-------------|------------|------------|---------|--------|--------|----------|-------|-------|-------
-iResNet-100 | 65,150,912 | WebFace12M | AdaFace | 99.21% | 99.82% | 98.00%   | 96.15% | 97.27% | [mk-minchul/AdaFace](https://github.com/mk-minchul/AdaFace)
-iResNet-18  | 24,020,352 | WebFace4M  | AdaFace | 97.09% | 99.52% | 96.27%   | 90.29% | 92.60% | [mk-minchul/AdaFace](https://github.com/mk-minchul/AdaFace)
+Model       | Params     | Dataset    | Loss    | CFP-FP | LFW    | AgeDB-30 | IJB-B  | IJB-C  | Source
+------------|------------|------------|---------|--------|--------|----------|--------|--------|-------
+iResNet-100 | 65,150,912 | WebFace12M | AdaFace | 99.30% | 99.82% | 97.95%   | 96.23% | 97.49% | [mk-minchul/AdaFace](https://github.com/mk-minchul/AdaFace)
 iResNet-100 | 65,156,288 | Glint360k  | CosFace(?) | 99.16% | 99.83% | 98.45% | 95.78% | 97.04% | [deepinsight/insightface](https://github.com/deepinsight/insightface) (antelopev2)
 iResNet-50  | 43,590,976 | WebFace12M | CosFace(?) | 99.24% | 99.80% | 98.07% | 95.35% | 96.83% | [deepinsight/insightface](https://github.com/deepinsight/insightface) (buffalo_l)
+iResNet-18  | 24,020,352 | WebFace4M  | AdaFace | 97.53% | 99.60% | 96.33%   | 92.00% | 94.16% | [mk-minchul/AdaFace](https://github.com/mk-minchul/AdaFace)
 GhostFaceNetV1 (S1) | 4,087,794 | MS1MV3 | ArcFace | 97.01% | 99.52% | 97.12% | 92.48% | 94.46% | [HamadYA/GhostFaceNets](https://github.com/HamadYA/GhostFaceNets)
 [ViT/S-8 (GAP)](https://huggingface.co/gaunernst/vit_small_patch8_gap_112.cosface_ms1mv3) | 21,640,832 | MS1MV3 | CosFace | 98.56% | 99.78% | 97.90% | 94.38% | 95.88% | This repo
 [ViT/Ti-8](https://huggingface.co/gaunernst/vit_tiny_patch8_112.cosface_ms1mv3) |  5,512,640 | MS1MV3 | CosFace | 96.44% | 99.77% | 97.23% | 92.69% | 94.49% | This repo
@@ -22,7 +22,9 @@ GhostFaceNetV1 (S1) | 4,087,794 | MS1MV3 | ArcFace | 97.01% | 99.52% | 97.12% | 
 [ConvNeXt-Nano](https://huggingface.co/gaunernst/convnext_nano.cosface_ms1mv3)  | 15,303,712 | MS1MV3 | CosFace | 97.94% | 99.67% | 97.58% | 93.45% | 95.13% | This repo
 [ConvNeXt-Atto](https://huggingface.co/gaunernst/convnext_atto.cosface_ms1mv3)  |  3,543,952 | MS1MV3 | CosFace | 96.33% | 99.68% | 96.90% | 91.76% | 93.58% | This repo
 
-NOTE: for GhostFaceNet, I export the TensorFlow model to ONNX and run inference with the ONNX model.
+NOTE:
+- For mk-minchul/AdaFace models, input image is BGR.
+- For GhostFaceNet, I export the TensorFlow model to ONNX and run inference with the ONNX model.
 
 ## Training
 
