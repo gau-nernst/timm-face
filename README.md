@@ -62,6 +62,14 @@ torchrun --standalone --nproc-per-node=4 train.py --backbone convnext_atto --bac
 
 For more information, see [torchrun](https://pytorch.org/docs/stable/elastic/run.html)
 
+## Other train options
+
+TPU training (using [torch-xla](https://github.com/pytorch/xla)) (WIP)
+
+```bash
+python train_tpu.py --backbone convnext_atto --backbone_kwargs '{"patch_size":2}' --ds_path "https://huggingface.co/datasets/gaunernst/ms1mv3-wds/resolve/main/ms1mv3-{0000..0099}.tar" --batch_size 768 --total_steps 200_000 --lr 1e-3 --weight_decay 1e-1 --clip_grad_norm 1 --run_name convnext_atto_cosface --eval_interval 10_000 --loss cosface
+```
+
 ## Evaluation
 
 For IJB-B and IJB-C, download dataset and metadata from `https://github.com/deepinsight/insightface/tree/master/recognition/_evaluation_/ijb`. Then run the following command
