@@ -74,6 +74,8 @@ def create_train_dloader(
     ]
     transform = v2.Compose(transform_list)
 
+    pin_memory = torch.device(device).type == "cuda"
+
     if path.startswith("wds://"):
         import webdataset as wds
 
@@ -85,12 +87,12 @@ def create_train_dloader(
             .map_tuple(lambda x: transform(decode_image_pt(x)), lambda x: int(x.decode()))
             .batched(batch_size, partial=False)
         )
-        dloader = DataLoader(ds, None, num_workers=n_workers, pin_memory=True)
+        dloader = DataLoader(ds, None, num_workers=n_workers, pin_memory=pin_memory)
         ds_length = float("inf")
 
     else:
         ds = InsightFaceRecordIoDataset(path, transform=transform)
-        dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=n_workers, pin_memory=True, drop_last=True)
+        dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=n_workers, pin_memory=pin_memory, drop_last=True)
         ds_length = len(ds)
 
     return cycle(dloader, device=device), ds_length

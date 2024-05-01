@@ -93,6 +93,7 @@ def get_parser():
 
 if __name__ == "__main__":
     args = get_parser().parse_args()
+    device = "cuda"
 
     # https://pytorch.org/tutorials/intermediate/ddp_tutorial.html
     # https://pytorch.org/docs/stable/elastic/run.html
@@ -132,7 +133,7 @@ if __name__ == "__main__":
         batch_size // args.grad_accum,
         augmentations=args.augmentations,
         n_workers=args.n_workers,
-        device="cuda",
+        device=device,
     )
     if is_rank0:
         print(f"Train dataset: {train_size:,} images")
@@ -147,7 +148,7 @@ if __name__ == "__main__":
         loss_kwargs=args.loss_kwargs,
         reduce_first_conv_stride=args.reduce_first_conv_stride,
         partial_fc=args.partial_fc,
-    ).to("cuda")
+    ).to(device)
     if args.channels_last:
         model.to(memory_format=torch.channels_last)
     if args.compile:
@@ -192,7 +193,7 @@ if __name__ == "__main__":
         # this will broadcast weights to other processes at init
         model = DDP(model, device_ids=[local_rank], broadcast_buffers=False)
 
-        step_tensor = torch.tensor(step, device="cuda")
+        step_tensor = torch.tensor(step, device=device)
         dist.broadcast(step_tensor, 0)
         step = step_tensor.item()
 
@@ -256,8 +257,8 @@ if __name__ == "__main__":
                     for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
                         all_labels.append(labels.clone().numpy())
                         with torch.no_grad(), torch.autocast("cuda", amp_dtype, amp_enabled):
-                            embs1 = ema(imgs1.to("cuda")).float()
-                            embs2 = ema(imgs2.to("cuda")).float()
+                            embs1 = ema(imgs1.to(device)).float()
+                            embs2 = ema(imgs2.to(device)).float()
                         all_scores.append((embs1 * embs2).sum(1).cpu().numpy())
 
                     all_labels = np.concatenate(all_labels, axis=0)
