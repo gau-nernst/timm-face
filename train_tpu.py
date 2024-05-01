@@ -16,6 +16,7 @@ import torch_xla.distributed.parallel_loader as pl
 import torch_xla.distributed.xla_multiprocessing as xmp
 import wandb
 from torch.utils.data import DataLoader
+from torch_xla.amp import syncfree
 from tqdm import tqdm
 
 from data import InsightFaceBinDataset, create_train_dloader
@@ -79,8 +80,8 @@ if __name__ == "__main__":
             print("LAMB already has clip_grad_norm. Make sure this is intended.")
 
     optim_dict = dict(
-        SGD=torch.optim.SGD,
-        AdamW=torch.optim.AdamW,
+        SGD=syncfree.SGD,
+        AdamW=syncfree.AdamW,
         LAMB=timm.optim.Lamb,
     )
     optim = optim_dict[args.optim](
