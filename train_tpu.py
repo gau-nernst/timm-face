@@ -21,7 +21,7 @@ from tqdm import tqdm
 from data import InsightFaceBinDataset, create_train_dloader
 from ema import EMA
 from modelling import TimmFace
-from train import CosineSchedule, get_parser, kfold_accuracy
+from train import CosineSchedule, autocast, get_parser, kfold_accuracy
 
 
 if __name__ == "__main__":
@@ -115,7 +115,7 @@ if __name__ == "__main__":
 
         for _ in range(args.grad_accum):
             images, labels = next(dloader)
-            with torch.autocast("xla", amp_dtype, amp_enabled):
+            with autocast(device, args.amp_dtype):
                 loss, norms = model(images, labels)
             (loss / args.grad_accum).backward()
 
@@ -161,7 +161,7 @@ if __name__ == "__main__":
 
                     for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
                         all_labels.append(labels.clone().numpy())
-                        with torch.no_grad(), torch.autocast("xla", amp_dtype, amp_enabled):
+                        with torch.no_grad(), autocast(device, args.amp_dtype):
                             embs1 = ema(imgs1.to(device)).float()
                             embs2 = ema(imgs2.to(device)).float()
                         all_scores.append((embs1 * embs2).sum(1).cpu().numpy())

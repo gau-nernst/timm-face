@@ -35,6 +35,13 @@ class CosineSchedule:
         return self.final_lr
 
 
+def autocast(device: str, dtype: str):
+    device_type = torch.device(device).type
+    amp_dtype = dict(bfloat16=torch.bfloat16, float16=torch.float16, none=None)[args.amp_dtype]
+    amp_enabled = amp_dtype is not None
+    return torch.autocast(device_type, dtype=amp_dtype, enabled=amp_enabled)
+
+
 # adapted from https://github.com/deepinsight/insightface/blob/v0.7/recognition/arcface_torch/eval/verification.py
 def kfold_accuracy(y_true: np.ndarray, y_score: np.ndarray, n_folds: int = 10):
     kfold = KFold(n_folds)
@@ -174,10 +181,7 @@ if __name__ == "__main__":
         **(args.optim_kwargs or dict()),
     )
     lr_schedule = CosineSchedule(args.lr, args.total_steps, warmup=args.warmup, decay_multiplier=args.decay_multiplier)
-
-    amp_dtype = dict(bfloat16=torch.bfloat16, float16=torch.float16, none=None)[args.amp_dtype]
-    amp_enabled = amp_dtype is not None
-    grad_scaler = torch.cuda.amp.GradScaler(enabled=amp_dtype is torch.float16)
+    grad_scaler = torch.cuda.amp.GradScaler(enabled=args.amp_dtype == "float16")
 
     step = 0
 
@@ -209,7 +213,7 @@ if __name__ == "__main__":
             images, labels = next(dloader)
             if args.channels_last:
                 images = images.to(memory_format=torch.channels_last)
-            with torch.autocast("cuda", amp_dtype, amp_enabled):
+            with autocast(device, args.amp_dtype):
                 loss, norms = model(images, labels)
             grad_scaler.scale(loss / args.grad_accum).backward()
 
@@ -256,7 +260,7 @@ if __name__ == "__main__":
 
                     for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
                         all_labels.append(labels.clone().numpy())
-                        with torch.no_grad(), torch.autocast("cuda", amp_dtype, amp_enabled):
+                        with torch.no_grad(), autocast(device, args.amp_dtype):
                             embs1 = ema(imgs1.to(device)).float()
                             embs2 = ema(imgs2.to(device)).float()
                         all_scores.append((embs1 * embs2).sum(1).cpu().numpy())
