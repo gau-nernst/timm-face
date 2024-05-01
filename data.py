@@ -51,7 +51,7 @@ def decode_image_pt(data):
     return tv.io.decode_image(torch.frombuffer(data, dtype=torch.uint8))
 
 
-def cycle(dloader: DataLoader, device: str = "cpu"):
+def cycle(dloader: DataLoader, device: str | None = None):
     while True:
         for batch in dloader:
             yield tuple(x.to(device) for x in batch)
@@ -74,7 +74,8 @@ def create_train_dloader(
     ]
     transform = v2.Compose(transform_list)
 
-    pin_memory = torch.device(device).type == "cuda"
+    device_type = torch.device(device).type
+    pin_memory = device_type == "cuda"
 
     if path.startswith("wds://"):
         import webdataset as wds
@@ -95,7 +96,15 @@ def create_train_dloader(
         dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=n_workers, pin_memory=pin_memory, drop_last=True)
         ds_length = len(ds)
 
-    return cycle(dloader, device=device), ds_length
+    if device_type == "xla":
+        import torch_xla.distributed.parallel_loader as pl
+
+        dloader = cycle(pl.MpDeviceLoader(dloader, device))
+
+    else:
+        dloader = cycle(dloader, device)
+
+    return dloader, ds_length
 
 
 class InsightFaceRecordIoDataset(Dataset):
