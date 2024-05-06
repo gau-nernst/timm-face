@@ -37,7 +37,7 @@ class CosineSchedule:
 
 def autocast(device: str, dtype: str):
     device_type = torch.device(device).type
-    amp_dtype = dict(bfloat16=torch.bfloat16, float16=torch.float16, none=None)[args.amp_dtype]
+    amp_dtype = dict(bfloat16=torch.bfloat16, float16=torch.float16, none=None)[dtype]
     amp_enabled = amp_dtype is not None
     return torch.autocast(device_type, dtype=amp_dtype, enabled=amp_enabled)
 
