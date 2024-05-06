@@ -1,10 +1,6 @@
 # references:
 # https://github.com/pytorch/xla/blob/master/test/test_train_mp_mnist_amp.py
 
-import argparse
-import json
-import math
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -12,7 +8,6 @@ import numpy as np
 import timm.optim
 import torch
 import torch_xla.core.xla_model as xm
-import torch_xla.distributed.parallel_loader as pl
 import torch_xla.distributed.xla_multiprocessing as xmp
 import wandb
 from torch.utils.data import DataLoader
@@ -25,7 +20,7 @@ from modelling import TimmFace
 from train import CosineSchedule, autocast, get_parser, kfold_accuracy
 
 
-if __name__ == "__main__":
+def main(index):
     args = get_parser().parse_args()
     assert args.channels_last is False, "You cannot set --channels_last for XLA"
     assert args.compile is False
@@ -91,9 +86,6 @@ if __name__ == "__main__":
         **(args.optim_kwargs or dict()),
     )
     lr_schedule = CosineSchedule(args.lr, args.total_steps, warmup=args.warmup, decay_multiplier=args.decay_multiplier)
-
-    amp_dtype = dict(bfloat16=torch.bfloat16, none=None)[args.amp_dtype]
-    amp_enabled = amp_dtype is not None
 
     step = 0
 
@@ -182,3 +174,7 @@ if __name__ == "__main__":
                 torch.save(checkpoint, CKPT_DIR / f"step_{step}.pth")
 
                 model.train()
+
+
+if __name__ == "__main__":
+    xmp.spawn(main)
