@@ -95,8 +95,9 @@ def create_train_dloader(
         ds = (
             wds.WebDataset(
                 path.removeprefix("wds://"),
-                shardshuffle=True,
-                nodesplitter=xla_node_splitter if device_type == "xla" else wds.split_by_node,
+                resampled=True,
+                # shardshuffle=True,
+                # nodesplitter=xla_node_splitter if device_type == "xla" else wds.split_by_node,
             )
             .shuffle(10_000, initial=10_000)
             .to_tuple("jpg", "cls")
