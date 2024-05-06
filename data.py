@@ -57,6 +57,18 @@ def cycle(dloader: DataLoader, device: str | None = None):
             yield tuple(x.to(device) for x in batch)
 
 
+# https://github.com/mlexample/torchxla_tpu/blob/main/test_train_mp_wds_cifar.py
+def xla_node_splitter(urls):
+    import torch_xla.core.xla_model as xm
+
+    rank = xm.get_ordinal()
+    num_replicas = xm.xrt_world_size()
+
+    urls_this = urls[rank::num_replicas]
+
+    return urls_this
+
+
 def create_train_dloader(
     path: str,
     batch_size: int,
@@ -80,9 +92,12 @@ def create_train_dloader(
     if path.startswith("wds://"):
         import webdataset as wds
 
-        path = path.removeprefix("wds://")
         ds = (
-            wds.WebDataset(path, shardshuffle=True, nodesplitter=wds.split_by_node)
+            wds.WebDataset(
+                path.removeprefix("wds://"),
+                shardshuffle=True,
+                nodesplitter=xla_node_splitter if device_type == "xla" else wds.split_by_node,
+            )
             .shuffle(10_000, initial=10_000)
             .to_tuple("jpg", "cls")
             .map_tuple(decode_image_pt, int)
