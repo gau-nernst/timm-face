@@ -1,3 +1,4 @@
+import itertools
 import pickle
 import struct
 import warnings
@@ -6,8 +7,9 @@ from typing import NamedTuple
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torchvision as tv
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from torchvision.transforms import v2
 
 
@@ -52,7 +54,11 @@ def decode_image_pt(data):
 
 
 def cycle(dloader: DataLoader, device: str = "cpu"):
-    while True:
+    for epoch_idx in itertools.count():
+        sampler = dloader.sampler
+        if isinstance(sampler, DistributedSampler):
+            sampler.set_epoch(epoch_idx)
+
         for batch in dloader:
             yield tuple(x.to(device) for x in batch)
 
@@ -90,7 +96,16 @@ def create_train_dloader(
 
     else:
         ds = InsightFaceRecordIoDataset(path, transform=transform)
-        dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=n_workers, pin_memory=True, drop_last=True)
+        sampler = DistributedSampler(ds) if dist.is_initialized() else None
+        dloader = DataLoader(
+            ds,
+            batch_size,
+            shuffle=sampler is None,
+            sampler=sampler,
+            num_workers=n_workers,
+            pin_memory=True,
+            drop_last=True,
+        )
         ds_length = len(ds)
 
     return cycle(dloader, device=device), ds_length
