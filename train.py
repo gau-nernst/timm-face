@@ -109,7 +109,7 @@ def build_optim(
     else:
         groups = list(model.parameters())
 
-    return optim_cls(group, lr=lr, weight_decay=weight_decay, **kwargs)
+    return optim_cls(groups, lr=lr, weight_decay=weight_decay, **kwargs)
 
 
 def amp_ctx(amp_dtype: torch.dtype | None):
@@ -163,6 +163,7 @@ if __name__ == "__main__":
     args = get_parser().parse_args()
     if args.model_dtype != torch.float32:
         assert args.amp_dtype is None, "AMP should not be used when model is FP16/BF16"
+    args.torch_version = torch.__version__
 
     # https://pytorch.org/tutorials/intermediate/ddp_tutorial.html
     # https://pytorch.org/docs/stable/elastic/run.html

@@ -1,9 +1,8 @@
-import torch
 from torch.utils.data import DataLoader
 from torchvision.transforms import v2
 
 from .insightface import InsightFaceRecordIoDataset
-from .utils import decode_img
+from .webdataset import WebDataset
 
 
 def cycle(dloader: DataLoader, device: str = "cpu"):
@@ -26,18 +25,17 @@ def create_train_dloader(
     ]
     transform = v2.Compose(transform_list)
 
-    if path.startswith("wds://"):
-        import webdataset as wds
+    if path.startswith("wds_"):
+        if path.startswith("wds_hf://"):
+            ds = WebDataset.from_hf(path.removeprefix("wds_hf://"), transform=transform)
 
-        path = path.removeprefix("wds://")
-        ds = (
-            wds.WebDataset(path, shardshuffle=True, nodesplitter=wds.split_by_node)
-            .shuffle(10_000, initial=10_000)
-            .to_tuple("jpg", "cls")
-            .map_tuple(lambda x: transform(decode_img(x)), lambda x: int(x.decode()))
-            .batched(batch_size, partial=False)
-        )
-        dloader = DataLoader(ds, None, num_workers=n_workers, pin_memory=True)
+        elif path.startswith("wds_folder://"):
+            ds = WebDataset.from_folder(path.removeprefix("wds_folder://"), transform=transform)
+
+        else:
+            raise ValueError(f"Unsupport {path=}")
+
+        dloader = DataLoader(ds, batch_size, num_workers=n_workers, pin_memory=True)
         ds_length = float("inf")
 
     else:

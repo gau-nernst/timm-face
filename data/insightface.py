@@ -23,7 +23,7 @@ class MXIndexedRecordIO:
 
     def read_idx(self, idx: int):
         offset = self.offsets[idx].item()
-        length = self.rec[offset + 4 : offset + 8].view(np.uint32)[0]
+        length = self.rec[offset + 4 : offset + 8].view(np.uint32)[0].item()
         return self.rec[offset + 8 : offset + 8 + length]
 
 
