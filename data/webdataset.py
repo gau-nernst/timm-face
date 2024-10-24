@@ -5,6 +5,7 @@ from typing import Callable
 
 import huggingface_hub
 import requests
+import requests.adapters
 import torch
 from torch import Tensor
 from torch.utils.data import IterableDataset
@@ -53,6 +54,10 @@ class WebDataset(IterableDataset):
     def _open_url(self, url: str):
         if self._sess is None:
             self._sess = requests.Session()
+            retries = requests.adapters.Retry(total=5, backoff_factor=0.1)
+            http = requests.adapters.HTTPAdapter(max_retries=retries)
+            self._sess.mount("http://", http)
+            self._sess.mount("https://", http)
 
         headers = dict()
         if url.startswith("https://huggingface.co/datasets"):

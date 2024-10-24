@@ -2,6 +2,7 @@ from torch.utils.data import DataLoader
 from torchvision.transforms import v2
 
 from .insightface import InsightFaceRecordIoDataset
+from .utils import ShuffleDataset, decode_img
 from .webdataset import WebDataset
 
 
@@ -25,12 +26,30 @@ def create_train_dloader(
     ]
     transform = v2.Compose(transform_list)
 
-    if path.startswith("wds_"):
-        if path.startswith("wds_hf://"):
+    if path.startswith("wds"):
+        # standard webdataset
+        if path.startswith("wds://"):
+            import webdataset as wds
+
+            ds = (
+                wds.WebDataset(
+                    path.removeprefix("wds://"),
+                    shardshuffle=True,
+                    nodesplitter=wds.split_by_node,
+                )
+                .shuffle(10_000, initial=10_000)
+                .to_tuple("jpg", "cls")
+                .map_tuple(lambda x: transform(decode_img(x)), lambda x: int(x.decode()))
+            )
+
+        # custom webdataset reader
+        elif path.startswith("wds_hf://"):
             ds = WebDataset.from_hf(path.removeprefix("wds_hf://"), transform=transform)
+            ds = ShuffleDataset(ds, buffer_size=10_000)
 
         elif path.startswith("wds_folder://"):
             ds = WebDataset.from_folder(path.removeprefix("wds_folder://"), transform=transform)
+            ds = ShuffleDataset(ds, buffer_size=10_000)
 
         else:
             raise ValueError(f"Unsupport {path=}")
