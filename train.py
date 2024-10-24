@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import math
 import os
 from datetime import datetime
@@ -17,6 +18,9 @@ from tqdm import tqdm
 from data import InsightFaceBinDataset, create_train_dloader
 from ema import EMA
 from modelling import TimmFace
+
+
+logger = logging.getLogger()
 
 
 class CosineSchedule:
@@ -54,6 +58,10 @@ def kfold_accuracy(y_true: np.ndarray, y_score: np.ndarray, n_folds: int = 10):
     return np.mean(accs)
 
 
+def amp_ctx(amp_dtype: torch.dtype | None):
+    return torch.autocast("cuda", amp_dtype, amp_dtype is not None)
+
+
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--backbone", required=True)
@@ -64,7 +72,11 @@ def get_parser():
     parser.add_argument("--reduce_first_conv_stride", action="store_true")
     parser.add_argument("--partial_fc", type=int, default=0)
 
-    parser.add_argument("--amp_dtype", choices=["bfloat16", "float16", "none"], default="bfloat16")
+    def _get_dtype(x: str):
+        return dict(fp32=torch.float32, bf16=torch.bfloat16, fp16=torch.float16)[x]
+
+    parser.add_argument("--model_dtype", type=_get_dtype, default=torch.float32)
+    parser.add_argument("--amp_dtype", type=_get_dtype)
     parser.add_argument("--channels_last", action="store_true")
     parser.add_argument("--compile", action="store_true")
 
@@ -80,7 +92,7 @@ def get_parser():
     parser.add_argument("--optim", default="AdamW")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-3)
-    parser.add_argument("--optim_kwargs", type=json.loads)
+    parser.add_argument("--optim_kwargs", type=json.loads, default=dict())
     parser.add_argument("--clip_grad_norm", type=float)
     parser.add_argument("--warmup", type=float, default=0.05)
     parser.add_argument("--decay_multiplier", type=float, default=0.01)
@@ -93,6 +105,8 @@ def get_parser():
 
 if __name__ == "__main__":
     args = get_parser().parse_args()
+    if args.model_dtype != torch.float32:
+        assert args.amp_dtype is None, "AMP should not be used when model is FP16/BF16"
 
     # https://pytorch.org/tutorials/intermediate/ddp_tutorial.html
     # https://pytorch.org/docs/stable/elastic/run.html
@@ -103,7 +117,7 @@ if __name__ == "__main__":
 
         dist.init_process_group("nccl")
         local_rank = int(os.environ["LOCAL_RANK"])
-        is_rank0 = int(os.environ["RANK"]) == 0
+        is_master = int(os.environ["RANK"]) == 0
         torch.cuda.set_device(local_rank)
 
         world_size = int(os.environ["WORLD_SIZE"])
@@ -111,12 +125,12 @@ if __name__ == "__main__":
         batch_size = args.batch_size // world_size
 
     else:
-        is_rank0 = True
+        is_master = True
         batch_size = args.batch_size
 
-    if is_rank0:
+    if is_master:
         for k, v in vars(args).items():
-            print(f"{k}: {v}")
+            logger.info(f"{k}: {v}")
 
         time_now = datetime.now().strftime("%Y%m%d_%H%M%S")
         CKPT_DIR = Path("checkpoints") / f"{args.run_name}_{time_now}"
@@ -134,32 +148,36 @@ if __name__ == "__main__":
         n_workers=args.n_workers,
         device="cuda",
     )
-    if is_rank0:
-        print(f"Train dataset: {train_size:,} images")
-        print(f"{args.total_steps / (train_size // args.batch_size):.2f} epochs")
+    if is_master:
+        logger.info(f"Train dataset: {train_size:,} images")
+        logger.info(f"{args.total_steps / (train_size // args.batch_size):.2f} epochs")
         val_ds_paths = sorted(Path(args.ds_path).glob("*.bin")) if args.val_ds is None else args.val_ds
 
-    model = TimmFace(
-        args.backbone,
-        args.n_classes,
-        args.loss,
-        backbone_kwargs=args.backbone_kwargs,
-        loss_kwargs=args.loss_kwargs,
-        reduce_first_conv_stride=args.reduce_first_conv_stride,
-        partial_fc=args.partial_fc,
-    ).to("cuda")
+    model = (
+        TimmFace(
+            args.backbone,
+            args.n_classes,
+            args.loss,
+            backbone_kwargs=args.backbone_kwargs,
+            loss_kwargs=args.loss_kwargs,
+            reduce_first_conv_stride=args.reduce_first_conv_stride,
+            partial_fc=args.partial_fc,
+        )
+        .to(args.model_dtype)
+        .cuda()
+    )
     if args.channels_last:
         model.to(memory_format=torch.channels_last)
     if args.compile:
-        model.backbone.compile(fullgraph=True)
-    if is_rank0:
+        model.compile()
+    if is_master:
         ema = EMA(model)
-        print("Model parameters:")
-        print(f"  Backbone: {sum(p.numel() for p in model.backbone.parameters()):,}")
-        print(f"  Head: {model.weight.numel():,}")
+        logger.info("Model parameters:")
+        logger.info(f"  Backbone: {sum(p.numel() for p in model.backbone.parameters()):,}")
+        logger.info(f"  Head: {model.weight.numel():,}")
 
         if args.optim == "LAMB" and args.clip_grad_norm is not None:
-            print("LAMB already has clip_grad_norm. Make sure this is intended.")
+            logger.warning("LAMB already has clip_grad_norm. Make sure this is intended.")
 
     optim_dict = dict(
         SGD=torch.optim.SGD,
@@ -170,18 +188,16 @@ if __name__ == "__main__":
         model.parameters(),
         lr=args.lr,
         weight_decay=args.weight_decay,
-        **(args.optim_kwargs or dict()),
+        **args.optim_kwargs,
     )
     lr_schedule = CosineSchedule(args.lr, args.total_steps, warmup=args.warmup, decay_multiplier=args.decay_multiplier)
 
-    amp_dtype = dict(bfloat16=torch.bfloat16, float16=torch.float16, none=None)[args.amp_dtype]
-    amp_enabled = amp_dtype is not None
-    grad_scaler = torch.cuda.amp.GradScaler(enabled=amp_dtype is torch.float16)
+    grad_scaler = torch.amp.GradScaler(enabled=args.amp_dtype is torch.float16)
 
     step = 0
 
-    if args.resume is not None and is_rank0:
-        print(f"Resume from {args.resume}")
+    if args.resume is not None and is_master:
+        logger.info(f"Resume from {args.resume}")
         ckpt = torch.load(args.resume)
         step = ckpt["step"]
         model.load_state_dict(ckpt["model"])
@@ -190,37 +206,40 @@ if __name__ == "__main__":
 
     if is_ddp:
         # this will broadcast weights to other processes at init
+        # TODO: sync batch norm
         model = DDP(model, device_ids=[local_rank], broadcast_buffers=False)
 
         step_tensor = torch.tensor(step, device="cuda")
         dist.broadcast(step_tensor, 0)
         step = step_tensor.item()
 
-    pbar = tqdm(total=args.total_steps, dynamic_ncols=True, initial=step, disable=not is_rank0)
+    pbar = tqdm(total=args.total_steps, dynamic_ncols=True, initial=step, disable=not is_master)
     model.train()
 
     while step < args.total_steps:
-        lr = lr_schedule.get_lr(step)
-        for param_group in optim.param_groups:
-            param_group["lr"] = lr
-
         for _ in range(args.grad_accum):
             images, labels = next(dloader)
             if args.channels_last:
                 images = images.to(memory_format=torch.channels_last)
-            with torch.autocast("cuda", amp_dtype, amp_enabled):
+            with amp_ctx(args.amp_dtype):
                 loss, norms = model(images, labels)
             grad_scaler.scale(loss / args.grad_accum).backward()
 
+        lr = lr_schedule.get_lr(step)
+        for param_group in optim.param_groups:
+            param_group["lr"] = lr
+
         grad_scaler.unscale_(optim)
+        grad_norm = None
         if args.clip_grad_norm is not None:
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
-        else:
-            grads = [p.grad.detach() for p in model.parameters() if p.grad is not None]
-            grad_norms = torch._foreach_norm(grads)
-            grad_norm = torch.linalg.vector_norm(torch.stack(grad_norms, dim=0))
 
-        if is_rank0 and step % 100 == 0:
+        if is_master and step % 100 == 0:
+            if grad_norm is None:
+                grads = [p.grad.detach() for p in model.parameters() if p.grad is not None]
+                grad_norms = torch._foreach_norm(grads)
+                grad_norm = torch.linalg.vector_norm(torch.stack(grad_norms, dim=0))
+
             norms = norms.detach().cpu().numpy()
             log_dict = dict(
                 loss=loss.item(),
@@ -238,7 +257,7 @@ if __name__ == "__main__":
         step += 1
         pbar.update()
 
-        if is_rank0:
+        if is_master:
             ema.update(step)
 
             if step % args.eval_interval == 0:
@@ -255,7 +274,7 @@ if __name__ == "__main__":
 
                     for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
                         all_labels.append(labels.clone().numpy())
-                        with torch.no_grad(), torch.autocast("cuda", amp_dtype, amp_enabled):
+                        with torch.no_grad(), amp_ctx(args.amp_dtype):
                             embs1 = ema(imgs1.to("cuda")).float()
                             embs2 = ema(imgs2.to("cuda")).float()
                         all_scores.append((embs1 * embs2).sum(1).cpu().numpy())
@@ -275,6 +294,9 @@ if __name__ == "__main__":
                 torch.save(checkpoint, CKPT_DIR / f"step_{step}.pth")
 
                 model.train()
+
+            if is_ddp:
+                dist.barrier()
 
     if is_ddp:
         dist.destroy_process_group()

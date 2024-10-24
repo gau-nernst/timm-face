@@ -1,18 +1,14 @@
 import pickle
 import struct
-import warnings
 from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
 import torch
-import torchvision as tv
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from torchvision.transforms import v2
 
-
-# suppress PyTorch's complaint
-warnings.filterwarnings("ignore", message="The given buffer is not writable", category=UserWarning)
+from .utils import decode_img
 
 
 # drop-in replacement for mxnet.recordio.MXIndexedRecordIO
@@ -47,55 +43,6 @@ def unpack(s):
     return Header(flag, label, id, id2), s
 
 
-def decode_image_pt(data):
-    return tv.io.decode_image(torch.frombuffer(data, dtype=torch.uint8))
-
-
-def cycle(dloader: DataLoader, device: str = "cpu"):
-    while True:
-        for batch in dloader:
-            yield tuple(x.to(device) for x in batch)
-
-
-def create_train_dloader(
-    path: str,
-    batch_size: int,
-    augmentations: list[str] | None = None,
-    n_workers: int = 4,
-    device: str = "cpu",
-):
-    augmentations = augmentations or []
-    transform_list = [
-        v2.ToImage(),
-        v2.RandomHorizontalFlip(),
-        *[eval(aug, dict(v2=v2)) for aug in augmentations],
-        v2.ToDtype(torch.float32, scale=True),
-        v2.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
-    ]
-    transform = v2.Compose(transform_list)
-
-    if path.startswith("wds://"):
-        import webdataset as wds
-
-        path = path.removeprefix("wds://")
-        ds = (
-            wds.WebDataset(path, shardshuffle=True, nodesplitter=wds.split_by_node)
-            .shuffle(10_000, initial=10_000)
-            .to_tuple("jpg", "cls")
-            .map_tuple(lambda x: transform(decode_image_pt(x)), lambda x: int(x.decode()))
-            .batched(batch_size, partial=False)
-        )
-        dloader = DataLoader(ds, None, num_workers=n_workers, pin_memory=True)
-        ds_length = float("inf")
-
-    else:
-        ds = InsightFaceRecordIoDataset(path, transform=transform)
-        dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=n_workers, pin_memory=True, drop_last=True)
-        ds_length = len(ds)
-
-    return cycle(dloader, device=device), ds_length
-
-
 class InsightFaceRecordIoDataset(Dataset):
     def __init__(self, path: str, transform=None):
         super().__init__()
@@ -114,7 +61,7 @@ class InsightFaceRecordIoDataset(Dataset):
             label = label[0]
         label = int(label)
 
-        img = decode_image_pt(raw_img)
+        img = decode_img(raw_img)
         if self.transform is not None:
             img = self.transform(img)
 
@@ -143,8 +90,8 @@ class InsightFaceBinDataset(Dataset):
         self.transform = v2.Compose(transform_list)
 
     def __getitem__(self, idx: int):
-        img1 = self.transform(decode_image_pt(self.raw_images[2 * idx]))
-        img2 = self.transform(decode_image_pt(self.raw_images[2 * idx + 1]))
+        img1 = self.transform(decode_img(self.raw_images[2 * idx]))
+        img2 = self.transform(decode_img(self.raw_images[2 * idx + 1]))
         label = int(self.labels[idx])
         return img1, img2, label
 
