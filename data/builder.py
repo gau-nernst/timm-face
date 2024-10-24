@@ -23,8 +23,6 @@ def create_train_dloader(
     transform_list = [
         v2.ToImage(),
         *[eval(aug, dict(v2=v2)) for aug in augmentations],
-        v2.ToDtype(torch.float32, scale=True),
-        v2.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
     ]
     transform = v2.Compose(transform_list)
 

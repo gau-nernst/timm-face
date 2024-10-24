@@ -230,7 +230,7 @@ if __name__ == "__main__":
             if args.channels_last:
                 images = images.to(memory_format=torch.channels_last)
             with amp_ctx(args.amp_dtype):
-                loss, norms = model(images.to(args.model_dtype), labels)
+                loss, norms = model(images, labels)
             (loss / args.grad_accum).backward()
 
         lr = lr_schedule.set_lr(step, optim)
@@ -290,8 +290,8 @@ if __name__ == "__main__":
                     for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
                         all_labels.append(labels.clone().numpy())
                         with torch.no_grad(), amp_ctx(args.amp_dtype):
-                            embs1 = ema(imgs1.to(dtype=args.model_dtype, device="cuda")).float()
-                            embs2 = ema(imgs2.to(dtype=args.model_dtype, device="cuda")).float()
+                            embs1 = ema(imgs1.cuda()).float()
+                            embs2 = ema(imgs2.cuda()).float()
                         all_scores.append((embs1 * embs2).sum(1).cpu().numpy())
 
                     all_labels = np.concatenate(all_labels, axis=0)

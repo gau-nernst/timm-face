@@ -36,6 +36,9 @@ class TimmFace(nn.Module):
         self.partial_fc = partial_fc
 
     def forward(self, imgs: Tensor, labels: Tensor | None = None) -> Tensor:
+        imgs = (imgs.float() - 127.5) / 127.5
+        imgs = imgs.to(self.weight.dtype)
+
         embs = self.backbone(imgs)
         if not self.training:
             return F.normalize(embs, dim=1)
