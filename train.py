@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -136,9 +137,7 @@ if __name__ == "__main__":
         CKPT_DIR = Path("checkpoints") / f"{args.run_name}_{time_now}"
         assert not CKPT_DIR.exists()
         CKPT_DIR.mkdir(parents=True, exist_ok=True)
-
-        Path("wandb_logs").mkdir(exist_ok=True)
-        wandb.init(project="Timm Face", name=args.run_name, config=args, dir="wandb_logs")
+        wandb.init(project="Timm Face", name=args.run_name, config=args, dir="/tmp")
 
     assert batch_size % args.grad_accum == 0
     dloader, train_size = create_train_dloader(
@@ -215,6 +214,8 @@ if __name__ == "__main__":
 
     pbar = tqdm(total=args.total_steps, dynamic_ncols=True, initial=step, disable=not is_master)
     model.train()
+    time0 = time.perf_counter()
+    log_interval = 100
 
     while step < args.total_steps:
         for _ in range(args.grad_accum):
@@ -234,21 +235,24 @@ if __name__ == "__main__":
         if args.clip_grad_norm is not None:
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
 
-        if is_master and step % 100 == 0:
-            if grad_norm is None:
-                grads = [p.grad.detach() for p in model.parameters() if p.grad is not None]
-                grad_norms = torch._foreach_norm(grads)
-                grad_norm = torch.linalg.vector_norm(torch.stack(grad_norms, dim=0))
-
-            norms = norms.detach().cpu().numpy()
-            log_dict = dict(
-                loss=loss.item(),
-                lr=lr,
-                norm_hist=wandb.Histogram(norms),
-                norm_mean=norms.mean(),
-                grad_norm=grad_norm.item(),
-            )
-            wandb.log(log_dict, step=step)
+        if step % log_interval == 0:
+            loss = loss.detach()
+            if is_ddp:
+                dist.all_reduce(loss, dist.ReduceOp.AVG)
+            if is_master:
+                if grad_norm is None:
+                    grads = [p.grad.detach() for p in model.parameters() if p.grad is not None]
+                    grad_norms = torch._foreach_norm(grads)
+                    grad_norm = torch.linalg.vector_norm(torch.stack(grad_norms, dim=0))
+                norms = norms.detach().cpu().numpy()
+                log_dict = dict(
+                    loss=loss.item(),
+                    lr=lr,
+                    norm_hist=wandb.Histogram(norms),
+                    norm_mean=norms.mean(),
+                    grad_norm=grad_norm.item(),
+                )
+                wandb.log(log_dict, step=step)
 
         grad_scaler.step(optim)
         grad_scaler.update()
@@ -258,6 +262,16 @@ if __name__ == "__main__":
         pbar.update()
 
         if is_master:
+            if step % log_interval == 0:
+                time1 = time.perf_counter()
+                log_dict = dict(
+                    max_memory_allocated=torch.cuda.max_memory_allocated(),
+                    imgs_seen_millions=args.batch_size * step / 1e6,
+                    imgs_per_second=args.batch_size * log_interval / (time1 - time0),
+                )
+                wandb.log(log_dict, step=step)
+                time0 = time1
+
             ema.update(step)
 
             if step % args.eval_interval == 0:
@@ -294,9 +308,6 @@ if __name__ == "__main__":
                 torch.save(checkpoint, CKPT_DIR / f"step_{step}.pth")
 
                 model.train()
-
-            if is_ddp:
-                dist.barrier()
 
     if is_ddp:
         dist.destroy_process_group()
