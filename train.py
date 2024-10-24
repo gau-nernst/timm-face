@@ -13,6 +13,7 @@ import torch
 import wandb
 from sklearn.metrics import accuracy_score, roc_curve
 from sklearn.model_selection import KFold
+from torch import Tensor, nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -39,6 +40,15 @@ class CosineSchedule:
             return self.final_lr + 0.5 * (self.lr - self.final_lr) * (1 + math.cos(progress * math.pi))
         return self.final_lr
 
+    def set_lr(self, step: int, optim):
+        lr = self.get_lr(step)
+        for group in optim.param_groups:
+            if isinstance(group["lr"], Tensor):
+                group["lr"].copy_(lr)
+            else:
+                group["lr"] = lr
+        return lr
+
 
 # adapted from https://github.com/deepinsight/insightface/blob/v0.7/recognition/arcface_torch/eval/verification.py
 def kfold_accuracy(y_true: np.ndarray, y_score: np.ndarray, n_folds: int = 10):
@@ -59,6 +69,20 @@ def kfold_accuracy(y_true: np.ndarray, y_score: np.ndarray, n_folds: int = 10):
     return np.mean(accs)
 
 
+def build_optim(model: nn.Module, optim: str, lr: float, weight_decay: float, **kwargs):
+    _globals = dict(torch=torch, timm=timm)
+    try:
+        import torchao.prototype.low_bit_optim
+
+        _globals["torchao"] = torchao
+    except ImportError:
+        pass
+    optim_cls = eval(optim, _globals)
+
+    # TODO: param groups to change LR/WD for last layer
+    return optim_cls(model.parameters(), lr=lr, weight_decay=weight_decay, **kwargs)
+
+
 def amp_ctx(amp_dtype: torch.dtype | None):
     return torch.autocast("cuda", amp_dtype, amp_dtype is not None)
 
@@ -74,7 +98,7 @@ def get_parser():
     parser.add_argument("--partial_fc", type=int, default=0)
 
     def _get_dtype(x: str):
-        return dict(fp32=torch.float32, bf16=torch.bfloat16, fp16=torch.float16)[x]
+        return dict(fp32=torch.float32, bf16=torch.bfloat16)[x]
 
     parser.add_argument("--model_dtype", type=_get_dtype, default=torch.float32)
     parser.add_argument("--amp_dtype", type=_get_dtype)
@@ -90,7 +114,7 @@ def get_parser():
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--n_workers", type=int, default=4)
 
-    parser.add_argument("--optim", default="AdamW")
+    parser.add_argument("--optim", default="torch.optim.AdamW")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-3)
     parser.add_argument("--optim_kwargs", type=json.loads, default=dict())
@@ -152,19 +176,18 @@ if __name__ == "__main__":
         logger.info(f"{args.total_steps / (train_size // args.batch_size):.2f} epochs")
         val_ds_paths = sorted(Path(args.ds_path).glob("*.bin")) if args.val_ds is None else args.val_ds
 
-    model = (
-        TimmFace(
-            args.backbone,
-            args.n_classes,
-            args.loss,
-            backbone_kwargs=args.backbone_kwargs,
-            loss_kwargs=args.loss_kwargs,
-            reduce_first_conv_stride=args.reduce_first_conv_stride,
-            partial_fc=args.partial_fc,
-        )
-        .to(args.model_dtype)
-        .cuda()
+    model = TimmFace(
+        args.backbone,
+        args.n_classes,
+        args.loss,
+        backbone_kwargs=args.backbone_kwargs,
+        loss_kwargs=args.loss_kwargs,
+        reduce_first_conv_stride=args.reduce_first_conv_stride,
+        partial_fc=args.partial_fc,
     )
+    for p in model.parameters():
+        p.data = p.detach().to(args.model_dtype)  # only cast params, don't cast buffers
+    model.cuda()
     if args.channels_last:
         model.to(memory_format=torch.channels_last)
     if args.compile:
@@ -175,24 +198,8 @@ if __name__ == "__main__":
         logger.info(f"  Backbone: {sum(p.numel() for p in model.backbone.parameters()):,}")
         logger.info(f"  Head: {model.weight.numel():,}")
 
-        if args.optim == "LAMB" and args.clip_grad_norm is not None:
-            logger.warning("LAMB already has clip_grad_norm. Make sure this is intended.")
-
-    optim_dict = dict(
-        SGD=torch.optim.SGD,
-        AdamW=torch.optim.AdamW,
-        LAMB=timm.optim.Lamb,
-    )
-    optim = optim_dict[args.optim](
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        **args.optim_kwargs,
-    )
+    optim = build_optim(model, args.optim, args.lr, args.weight_decay, **args.optim_kwargs)
     lr_schedule = CosineSchedule(args.lr, args.total_steps, warmup=args.warmup, decay_multiplier=args.decay_multiplier)
-
-    grad_scaler = torch.amp.GradScaler(enabled=args.amp_dtype is torch.float16)
-
     step = 0
 
     if args.resume is not None and is_master:
@@ -223,14 +230,10 @@ if __name__ == "__main__":
             if args.channels_last:
                 images = images.to(memory_format=torch.channels_last)
             with amp_ctx(args.amp_dtype):
-                loss, norms = model(images, labels)
-            grad_scaler.scale(loss / args.grad_accum).backward()
+                loss, norms = model(images.to(args.model_dtype), labels)
+            (loss / args.grad_accum).backward()
 
-        lr = lr_schedule.get_lr(step)
-        for param_group in optim.param_groups:
-            param_group["lr"] = lr
-
-        grad_scaler.unscale_(optim)
+        lr = lr_schedule.set_lr(step, optim)
         grad_norm = None
         if args.clip_grad_norm is not None:
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
@@ -254,10 +257,8 @@ if __name__ == "__main__":
                 )
                 wandb.log(log_dict, step=step)
 
-        grad_scaler.step(optim)
-        grad_scaler.update()
+        optim.step()
         optim.zero_grad()
-
         step += 1
         pbar.update()
 
@@ -289,8 +290,8 @@ if __name__ == "__main__":
                     for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
                         all_labels.append(labels.clone().numpy())
                         with torch.no_grad(), amp_ctx(args.amp_dtype):
-                            embs1 = ema(imgs1.to("cuda")).float()
-                            embs2 = ema(imgs2.to("cuda")).float()
+                            embs1 = ema(imgs1.to(dtype=args.model_dtype, device="cuda")).float()
+                            embs2 = ema(imgs2.to(dtype=args.model_dtype, device="cuda")).float()
                         all_scores.append((embs1 * embs2).sum(1).cpu().numpy())
 
                     all_labels = np.concatenate(all_labels, axis=0)

@@ -46,7 +46,8 @@ class TimmFace(nn.Module):
             weight = self.weight
         logits = F.normalize(embs, dim=1) @ F.normalize(weight, dim=1).T
 
-        norms = torch.linalg.vector_norm(embs.detach(), dim=1)
+        # make sure logits and norms for loss calculation is in FP32
+        norms = torch.linalg.vector_norm(embs.detach().float(), dim=1)
         loss = self.loss(logits.float(), norms, labels)
         return loss, norms
 
