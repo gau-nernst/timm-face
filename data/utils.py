@@ -3,7 +3,6 @@ import warnings
 import torch
 import torchvision
 
-
 # suppress PyTorch's complains
 warnings.filterwarnings("ignore", message="The given buffer is not writable", category=UserWarning)
 

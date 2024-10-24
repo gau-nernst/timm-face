@@ -3,9 +3,12 @@ import json
 import logging
 import math
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
+
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import numpy as np
 import timm.optim
@@ -21,8 +24,12 @@ from data import InsightFaceBinDataset, create_train_dloader
 from ema import EMA
 from modelling import TimmFace
 
-
 logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+_LOGGING_FORMATTER = logging.Formatter("[%(asctime)s] %(levelname)s [%(name)s:%(lineno)d] %(message)s")
+_stdout_handler = logging.StreamHandler(sys.stdout)
+_stdout_handler.setFormatter(_LOGGING_FORMATTER)
+logger.addHandler(_stdout_handler)
 
 
 class CosineSchedule:
@@ -69,7 +76,9 @@ def kfold_accuracy(y_true: np.ndarray, y_score: np.ndarray, n_folds: int = 10):
     return np.mean(accs)
 
 
-def build_optim(model: nn.Module, optim: str, lr: float, weight_decay: float, **kwargs):
+def build_optim(
+    model: nn.Module, optim: str, lr: float, weight_decay: float, param_groups: list[dict] | None = None, **kwargs
+):
     _globals = dict(torch=torch, timm=timm)
     try:
         import torchao.prototype.low_bit_optim
@@ -79,8 +88,28 @@ def build_optim(model: nn.Module, optim: str, lr: float, weight_decay: float, **
         pass
     optim_cls = eval(optim, _globals)
 
-    # TODO: param groups to change LR/WD for last layer
-    return optim_cls(model.parameters(), lr=lr, weight_decay=weight_decay, **kwargs)
+    def _match_prefix(name: str, prefix: str):
+        name_parts = name.split(".")
+        prefix_parts = prefix.split(".")
+        return name_parts[:prefix_parts] == prefix_parts
+
+    if param_groups is not None:
+        groups = []
+        for group in param_groups:
+            group = dict(group)  # shallow copy
+            prefix = group.pop(prefix)
+            group["params"] = [p for name, p in model.named_parameters() if _match_prefix(name, prefix)]
+            logger.info(f"  - {prefix=}: {sum(p.numel() for p in group['params']):,} params")
+            groups.append(group)
+
+        other_params = [p for p in model.parameters() if all(p not in group["params"] for group in groups)]
+        logger.info(f"  - others: {sum(p.numel() for p in other_params)}")
+        groups.append(dict(params=other_params))
+
+    else:
+        groups = list(model.parameters())
+
+    return optim_cls(group, lr=lr, weight_decay=weight_decay, **kwargs)
 
 
 def amp_ctx(amp_dtype: torch.dtype | None):
@@ -117,7 +146,9 @@ def get_parser():
     parser.add_argument("--optim", default="torch.optim.AdamW")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-3)
+    parser.add_argument("--param_groups", type=json.loads)
     parser.add_argument("--optim_kwargs", type=json.loads, default=dict())
+
     parser.add_argument("--clip_grad_norm", type=float)
     parser.add_argument("--warmup", type=float, default=0.05)
     parser.add_argument("--decay_multiplier", type=float, default=0.01)
@@ -198,7 +229,7 @@ if __name__ == "__main__":
         logger.info(f"  Backbone: {sum(p.numel() for p in model.backbone.parameters()):,}")
         logger.info(f"  Head: {model.weight.numel():,}")
 
-    optim = build_optim(model, args.optim, args.lr, args.weight_decay, **args.optim_kwargs)
+    optim = build_optim(model, args.optim, args.lr, args.weight_decay, args.param_groups, **args.optim_kwargs)
     lr_schedule = CosineSchedule(args.lr, args.total_steps, warmup=args.warmup, decay_multiplier=args.decay_multiplier)
     step = 0
 
@@ -212,7 +243,7 @@ if __name__ == "__main__":
 
     if is_ddp:
         # this will broadcast weights to other processes at init
-        # TODO: sync batch norm
+        nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = DDP(model, device_ids=[local_rank], broadcast_buffers=False)
 
         step_tensor = torch.tensor(step, device="cuda")
@@ -300,14 +331,14 @@ if __name__ == "__main__":
                     acc = kfold_accuracy(all_labels, all_scores)
                     wandb.log({f"acc/{val_ds_name}": acc}, step=step)
 
-                checkpoint = {
-                    "step": step,
-                    "model": model.state_dict(),
-                    "ema": ema.state_dict(),
-                    "optim": optim.state_dict(),
-                }
+                checkpoint = dict(
+                    step=step,
+                    model=model.state_dict(),
+                    ema=ema.state_dict(),
+                )
                 torch.save(checkpoint, CKPT_DIR / f"step_{step}.pth")
-
+                checkpoint.update(optim=optim.state_dict())
+                torch.save(checkpoint, CKPT_DIR / "last.pth")  # for resume, w/ optim states
                 model.train()
 
     if is_ddp:

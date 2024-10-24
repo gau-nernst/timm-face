@@ -18,7 +18,7 @@ class EMA(nn.Module):
         beta: float = 0.999,
     ) -> None:
         super().__init__()
-        self.ema_model = copy.deepcopy(model)
+        self.ema_model = copy.deepcopy(model).float()  # must use FP32 for ema model
         self.model = [model]  # not included in state dict
         self.warmup_steps = warmup_steps
         self.update_interval = update_interval
@@ -36,7 +36,7 @@ class EMA(nn.Module):
 
         for ema_p, p in zip(params_buffers(self.ema_model), params_buffers(self.model[0])):
             if ema_p.is_floating_point():
-                ema_p.lerp_(p, 1.0 - self.beta)
+                ema_p.lerp_(p.to(ema_p.dtype), 1.0 - self.beta)
             else:
                 ema_p.copy_(p)
 
