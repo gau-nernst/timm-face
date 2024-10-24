@@ -76,6 +76,36 @@ def kfold_accuracy(y_true: np.ndarray, y_score: np.ndarray, n_folds: int = 10):
     return np.mean(accs)
 
 
+@torch.no_grad()
+def evaluate_model(model: nn.Module, args: argparse.Namespace):
+    model.eval()
+    metrics = dict()
+
+    ds_paths = sorted(Path(args.ds_path).glob("*.bin")) if args.val_ds is None else args.val_ds
+
+    for ds_path in ds_paths:
+        ds_name = ds_path.stem
+        ds = InsightFaceBinDataset(str(ds_path))
+        dloader = DataLoader(ds, args.batch_size, num_workers=args.n_workers)
+
+        all_labels = []
+        all_scores = []
+
+        for imgs1, imgs2, labels in tqdm(dloader, dynamic_ncols=True, desc=f"Evaluating {ds_name}"):
+            all_labels.append(labels.clone().numpy())
+            with amp_ctx(args.amp_dtype):
+                embs1 = ema(imgs1.cuda()).float()
+                embs2 = ema(imgs2.cuda()).float()
+            all_scores.append((embs1 * embs2).sum(1).cpu().numpy())
+
+        all_labels = np.concatenate(all_labels, axis=0)
+        all_scores = np.concatenate(all_scores, axis=0)
+
+        metrics[f"acc/{ds_name}"] = kfold_accuracy(all_labels, all_scores)
+
+    return metrics
+
+
 def build_optim(
     model: nn.Module, optim: str, lr: float, weight_decay: float, param_groups: list[dict] | None = None, **kwargs
 ):
@@ -206,7 +236,6 @@ if __name__ == "__main__":
     if is_master:
         logger.info(f"Train dataset: {train_size:,} images")
         logger.info(f"{args.total_steps / (train_size // args.batch_size):.2f} epochs")
-        val_ds_paths = sorted(Path(args.ds_path).glob("*.bin")) if args.val_ds is None else args.val_ds
 
     model = TimmFace(
         args.backbone,
@@ -308,29 +337,10 @@ if __name__ == "__main__":
             ema.update(step)
 
             if step % args.eval_interval == 0:
-                ema.eval()
-                model.eval()
-
-                for val_ds_path in val_ds_paths:
-                    val_ds_name = val_ds_path.stem
-                    val_ds = InsightFaceBinDataset(str(val_ds_path))
-                    val_dloader = DataLoader(val_ds, args.batch_size, num_workers=args.n_workers)
-
-                    all_labels = []
-                    all_scores = []
-
-                    for imgs1, imgs2, labels in tqdm(val_dloader, dynamic_ncols=True, desc=f"Evaluating {val_ds_name}"):
-                        all_labels.append(labels.clone().numpy())
-                        with torch.no_grad(), amp_ctx(args.amp_dtype):
-                            embs1 = ema(imgs1.cuda()).float()
-                            embs2 = ema(imgs2.cuda()).float()
-                        all_scores.append((embs1 * embs2).sum(1).cpu().numpy())
-
-                    all_labels = np.concatenate(all_labels, axis=0)
-                    all_scores = np.concatenate(all_scores, axis=0)
-
-                    acc = kfold_accuracy(all_labels, all_scores)
-                    wandb.log({f"acc/{val_ds_name}": acc}, step=step)
+                metrics = evaluate_model(model, args)
+                wandb.log(metrics, step=step)
+                metrics = evaluate_model(ema, args)
+                wandb.log({f"ema_{k}": v for k, v in metrics.items()}, step=step)
 
                 checkpoint = dict(
                     step=step,
