@@ -50,11 +50,11 @@ class CosineSchedule:
     def set_lr(self, step: int, optim):
         lr = self.get_lr(step)
         for group in optim.param_groups:
+            group_lr = lr * group.get("lr_multiplier", 1)
             if isinstance(group["lr"], Tensor):
-                group["lr"].copy_(lr)
+                group["lr"].copy_(group_lr)
             else:
-                group["lr"] = lr
-        return lr
+                group["lr"] = group_lr
 
 
 # adapted from https://github.com/deepinsight/insightface/blob/v0.7/recognition/arcface_torch/eval/verification.py
@@ -126,20 +126,21 @@ def build_optim(
     def _match_prefix(name: str, prefix: str):
         name_parts = name.split(".")
         prefix_parts = prefix.split(".")
-        return name_parts[:prefix_parts] == prefix_parts
+        return name_parts[: len(prefix_parts)] == prefix_parts
 
     if param_groups is not None:
+        logger.info("Optimizer param groups:")
         groups = []
         for group in param_groups:
             group = dict(group)  # shallow copy
-            prefix = group.pop(prefix)
-            group["params"] = [p for name, p in model.named_parameters() if _match_prefix(name, prefix)]
-            logger.info(f"  - {prefix=}: {sum(p.numel() for p in group['params']):,} params")
+            params = [p for name, p in model.named_parameters() if _match_prefix(name, group["prefix"])]
+            logger.info(f"  - {group}: {sum(p.numel() for p in params):,} params")
+            group["params"] = params
             groups.append(group)
 
-        other_params = [p for p in model.parameters() if all(p not in group["params"] for group in groups)]
-        logger.info(f"  - others: {sum(p.numel() for p in other_params)}")
-        groups.append(dict(params=other_params))
+        other_params = [p for p in model.parameters() if all(p not in set(group["params"]) for group in groups)]
+        logger.info(f"  - others: {sum(p.numel() for p in other_params):,} params")
+        groups.append(dict(prefix="others", params=other_params))
 
     else:
         groups = list(model.parameters())
@@ -183,7 +184,7 @@ def get_parser():
     parser.add_argument("--optim", default="torch.optim.AdamW")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-3)
-    parser.add_argument("--param_groups", type=json.loads)
+    parser.add_argument("--param_groups", nargs="+", type=json.loads)
     parser.add_argument("--optim_kwargs", type=json.loads, default=dict())
 
     parser.add_argument("--clip_grad_norm", type=float)
@@ -305,7 +306,7 @@ if __name__ == "__main__":
                 loss, norms = model(images, labels)
             (loss / args.grad_accum).backward()
 
-        lr = lr_schedule.set_lr(step, optim)
+        lr_schedule.set_lr(step, optim)
         grad_norm = None
         if args.clip_grad_norm is not None:
             # gradient clipping with BF16 gradients might be problematic
@@ -323,11 +324,12 @@ if __name__ == "__main__":
                 norms = norms.detach().cpu().numpy()
                 log_dict = dict(
                     loss=loss.item(),
-                    lr=lr,
                     norm_hist=wandb.Histogram(norms),
                     norm_mean=norms.mean(),
                     grad_norm=grad_norm.item(),
                 )
+                for param_group in optim.param_groups:
+                    log_dict[f"lr/{param_group['prefix']}"] = param_group["lr"]
                 wandb.log(log_dict, step=step)
 
         optim.step()
