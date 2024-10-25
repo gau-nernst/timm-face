@@ -1,4 +1,5 @@
-from torch.utils.data import DataLoader
+import torch.distributed as dist
+from torch.utils.data import DataLoader, DistributedSampler
 from torchvision.transforms import v2
 
 from .insightface import InsightFaceRecordIoDataset
@@ -59,7 +60,15 @@ def create_train_dloader(
 
     else:
         ds = InsightFaceRecordIoDataset(path, transform=transform)
-        dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=n_workers, pin_memory=True, drop_last=True)
+        dloader = DataLoader(
+            ds,
+            batch_size,
+            shuffle=True,
+            sampler=DistributedSampler(ds) if dist.is_initialized() else None,
+            num_workers=n_workers,
+            pin_memory=True,
+            drop_last=True,
+        )
         ds_length = len(ds)
 
     return cycle(dloader, device=device), ds_length
