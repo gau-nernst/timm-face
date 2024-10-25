@@ -82,16 +82,9 @@ class InsightFaceBinDataset(Dataset):
 
         self.raw_images, self.labels = pickle.load(open(path, "rb"), encoding="bytes")
 
-        transform_list = [
-            v2.ToImage(),
-            v2.ToDtype(torch.float32, scale=True),
-            v2.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
-        ]
-        self.transform = v2.Compose(transform_list)
-
     def __getitem__(self, idx: int):
-        img1 = self.transform(decode_img(self.raw_images[2 * idx]))
-        img2 = self.transform(decode_img(self.raw_images[2 * idx + 1]))
+        img1 = decode_img(self.raw_images[2 * idx])
+        img2 = decode_img(self.raw_images[2 * idx + 1])
         label = int(self.labels[idx])
         return img1, img2, label
 
