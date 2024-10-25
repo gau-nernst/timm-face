@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 class WebDataset(IterableDataset):
+    _EXTS = ("tar", "tar.gz")
+
     def __init__(
         self,
         shards: list[str],
@@ -38,16 +40,19 @@ class WebDataset(IterableDataset):
     def from_hf(repo_id: str, **kwargs) -> "WebDataset":
         fs = huggingface_hub.HfFileSystem()
         urls = []
-        for path in fs.glob(f"hf://datasets/{repo_id}/**/*.tar"):
-            hf_file = fs.resolve_path(path)
-            url = huggingface_hub.hf_hub_url(repo_id, hf_file.path_in_repo, repo_type="dataset")
-            urls.append(url)
+        for ext in WebDataset._EXTS:
+            for path in fs.glob(f"hf://datasets/{repo_id}/**/*.{ext}"):
+                hf_file = fs.resolve_path(path)
+                url = huggingface_hub.hf_hub_url(repo_id, hf_file.path_in_repo, repo_type="dataset")
+                urls.append(url)
         urls.sort()
         return WebDataset(urls, **kwargs)
 
     @staticmethod
     def from_folder(data_dir: str, **kwargs) -> "WebDataset":
-        shards = list(Path(data_dir).glob("**/*.tar"))
+        shards = []
+        for ext in WebDataset._EXTS:
+            shards.extend(Path(data_dir).glob(f"**/*.{ext}"))
         shards.sort()
         return WebDataset(shards, **kwargs)
 
@@ -73,7 +78,7 @@ class WebDataset(IterableDataset):
             timeout=30,
             stream=True,
         )
-        return tarfile.open(fileobj=resp.raw, mode="r|")
+        return tarfile.open(fileobj=resp.raw, mode="r|*")
 
     def _open(self, shard: str):
         if Path(shard).exists():
