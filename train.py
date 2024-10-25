@@ -94,8 +94,8 @@ def evaluate_model(model: nn.Module, args: argparse.Namespace):
         for imgs1, imgs2, labels in tqdm(dloader, dynamic_ncols=True, desc=f"Evaluating {ds_name}"):
             all_labels.append(labels.clone().numpy())
             with amp_ctx(args.amp_dtype):
-                embs1 = ema(imgs1.cuda()).float()
-                embs2 = ema(imgs2.cuda()).float()
+                embs1 = model(imgs1.cuda()).float()
+                embs2 = model(imgs2.cuda()).float()
             all_scores.append((embs1 * embs2).sum(1).cpu().numpy())
 
         all_labels = np.concatenate(all_labels, axis=0)
@@ -107,7 +107,12 @@ def evaluate_model(model: nn.Module, args: argparse.Namespace):
 
 
 def build_optim(
-    model: nn.Module, optim: str, lr: float, weight_decay: float, param_groups: list[dict] | None = None, **kwargs
+    model: nn.Module,
+    optim: str,
+    lr: float,
+    weight_decay: float,
+    param_groups: list[dict] | None = None,
+    **kwargs,
 ):
     _globals = dict(torch=torch, timm=timm)
     try:
@@ -151,6 +156,7 @@ def get_parser():
     parser.add_argument("--backbone", required=True)
     parser.add_argument("--backbone_kwargs", type=json.loads, default=dict())
     parser.add_argument("--n_classes", type=int, default=93_431)  # MS1MV3
+    parser.add_argument("--embed_dim", type=int, default=512)
     parser.add_argument("--loss", default="cosface")
     parser.add_argument("--loss_kwargs", type=json.loads, default=dict())
     parser.add_argument("--reduce_first_conv_stride", action="store_true")
@@ -238,14 +244,16 @@ if __name__ == "__main__":
         logger.info(f"{args.total_steps / (train_size // args.batch_size):.2f} epochs")
 
     model = TimmFace(
-        args.backbone,
-        args.n_classes,
-        args.loss,
+        backbone=args.backbone,
+        n_classes=args.n_classes,
+        embed_dim=args.embed_dim,
+        loss=args.loss,
         backbone_kwargs=args.backbone_kwargs,
         loss_kwargs=args.loss_kwargs,
         reduce_first_conv_stride=args.reduce_first_conv_stride,
         partial_fc=args.partial_fc,
     )
+    # TODO: full BF16 is problematic. still investigate
     for p in model.parameters():
         p.data = p.detach().to(args.model_dtype)  # only cast params, don't cast buffers
     model.cuda()
@@ -297,6 +305,7 @@ if __name__ == "__main__":
         lr = lr_schedule.set_lr(step, optim)
         grad_norm = None
         if args.clip_grad_norm is not None:
+            # gradient clipping with BF16 gradients might be problematic
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
 
         if step % log_interval == 0:

@@ -13,15 +13,15 @@ class TimmFace(nn.Module):
         self,
         backbone: str,
         n_classes: int,
-        loss: str,
+        embed_dim: int = 512,
+        loss: str = "cosface",
         backbone_kwargs: dict | None = None,
         loss_kwargs: dict | None = None,
         reduce_first_conv_stride: bool = False,
         partial_fc: int = 0,
     ) -> None:
         super().__init__()
-        EMBED_DIM = 512
-        self.backbone = timm.create_model(backbone, num_classes=EMBED_DIM, **(backbone_kwargs or dict()))
+        self.backbone = timm.create_model(backbone, num_classes=embed_dim, **(backbone_kwargs or dict()))
 
         if reduce_first_conv_stride:
             first_conv = self.backbone
@@ -29,7 +29,7 @@ class TimmFace(nn.Module):
                 first_conv = getattr(first_conv, name)
             first_conv.stride = tuple(s // 2 for s in first_conv.stride)
 
-        self.weight = nn.Parameter(torch.empty(n_classes, EMBED_DIM).normal_(0, 0.01))
+        self.weight = nn.Parameter(torch.empty(n_classes, embed_dim).normal_(0, 0.01))
 
         loss_lookup = dict(adaface=AdaFace, arcface=ArcFace, cosface=CosFace)
         self.loss = loss_lookup[loss](**(loss_kwargs or dict()))
