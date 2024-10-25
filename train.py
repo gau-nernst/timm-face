@@ -168,6 +168,7 @@ def get_parser():
     parser.add_argument("--model_dtype", type=_get_dtype, default=torch.float32)
     parser.add_argument("--amp_dtype", type=_get_dtype)
     parser.add_argument("--channels_last", action="store_true")
+    parser.add_argument("--activation_checkpointing", action="store_true")
     parser.add_argument("--compile", action="store_true")
 
     parser.add_argument("--total_steps", type=int, default=1000)
@@ -256,6 +257,8 @@ if __name__ == "__main__":
     # TODO: full BF16 is problematic. still investigate
     for p in model.parameters():
         p.data = p.detach().to(args.model_dtype)  # only cast params, don't cast buffers
+    if args.activation_checkpointing:
+        model.backbone.set_grad_checkpointing()
     model.cuda()
     if args.channels_last:
         model.to(memory_format=torch.channels_last)
