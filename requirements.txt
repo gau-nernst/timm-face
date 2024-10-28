@@ -1,0 +1,6 @@
+timm
+huggingface_hub
+scikit-learn
+tqdm
+requests
+wandb
