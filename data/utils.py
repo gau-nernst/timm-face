@@ -3,7 +3,7 @@ import warnings
 import torch
 import torch.distributed as dist
 import torchvision
-from torch.utils.data import IterableDataset, get_worker_info
+from torch.utils.data import Dataset, IterableDataset, Sampler, get_worker_info
 
 # suppress PyTorch's complains
 warnings.filterwarnings("ignore", message="The given buffer is not writable", category=UserWarning)
@@ -15,6 +15,7 @@ def decode_img(data: bytes):
 
 
 def _get_dist_info(*, include_worker_info: bool = False):
+    """Return (rank, world_size)"""
     if dist.is_initialized():
         rank, world_size = dist.get_rank(), dist.get_world_size()
     else:
@@ -59,3 +60,33 @@ class ShuffleDataset(IterableDataset):
     def _shuffle(self, buffer: list):
         indices = torch.randperm(len(buffer), generator=self._generator)
         return [buffer[idx] for idx in indices]
+
+
+# NOTE: support resume correctly
+# https://github.com/facebookresearch/deit/blob/main/samplers.py
+# first introduced in Batch Augmentation https://arxiv.org/abs/1901.09335
+# also known as Repeated Augmentation in MultiGrain https://arxiv.org/abs/1902.05509
+class RepeatedSampler(Sampler):
+    def __init__(self, dataset: Dataset, num_repeats: int = 2, shuffle: bool = True) -> None:
+        assert shuffle
+        self.dataset = dataset
+        self.num_repeats = num_repeats
+
+        self.rank, self.world_size = _get_dist_info()
+        self.epoch = 0
+        self.size_per_rank = len(dataset) * num_repeats // self.world_size
+        self.total_size = self.size_per_rank * self.world_size
+
+    def __iter__(self):
+        # deterministic sequence of data based on epoch idx
+        indices = torch.randperm(len(self.dataset), generator=torch.Generator().manual_seed(self.epoch))
+        indices = torch.repeat_interleave(indices, self.num_repeats).tolist()
+        indices = indices[self.rank :: self.world_size][: self.size_per_rank]
+        assert len(indices) == self.size_per_rank
+        return iter(indices)
+
+    def __len__(self):
+        return self.size_per_rank
+
+    def set_epoch(self, epoch: int):
+        self.epoch = epoch
