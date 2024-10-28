@@ -32,22 +32,42 @@ _stdout_handler.setFormatter(_LOGGING_FORMATTER)
 logger.addHandler(_stdout_handler)
 
 
-class CosineSchedule:
-    def __init__(self, lr: float, total_steps: int, warmup: float = 0.05, decay_multiplier: float = 1e-2) -> None:
+class LRSchedule:
+    def __init__(
+        self,
+        lr: float,
+        total_steps: int,
+        warmup: float = 0.05,
+        decay: float = 0.0,
+        decay_type: str = "linear",
+    ) -> None:
         self.lr = lr
-        self.final_lr = lr * decay_multiplier
         self.total_steps = total_steps
-        self.warmup_steps = round(total_steps * warmup)
+        self.decay_type = decay_type
+        self.warmup_end = int(total_steps * warmup)
+        self.constant_end = total_steps - int(total_steps * decay)
+        assert self.constant_end >= self.warmup_end
+        assert decay_type in ("linear", "cosine")
 
     def get_lr(self, step: int) -> float:
-        if step < self.warmup_steps:
-            return self.lr * step / self.warmup_steps
-        if step < self.total_steps:
-            progress = (step - self.warmup_steps) / (self.total_steps - self.warmup_steps)
-            return self.final_lr + 0.5 * (self.lr - self.final_lr) * (1 + math.cos(progress * math.pi))
-        return self.final_lr
+        if step < self.warmup_end:
+            return self.lr * step / self.warmup_end
 
-    def set_lr(self, step: int, optim):
+        elif step < self.constant_end:
+            return self.lr
+
+        elif step < self.total_steps:
+            progress = (step - self.constant_end) / (self.total_steps - self.constant_end)
+
+            if self.decay_type == "linear":
+                return self.lr * (1 - progress)
+
+            elif self.decay_type == "cosine":
+                return 0.5 * self.lr * (1 + math.cos(progress * math.pi))
+
+        return 0.0
+
+    def set_lr(self, step: int, optim: torch.optim.Optimizer):
         lr = self.get_lr(step)
         for group in optim.param_groups:
             group_lr = lr * group.get("lr_multiplier", 1)
@@ -77,7 +97,7 @@ def kfold_accuracy(y_true: np.ndarray, y_score: np.ndarray, n_folds: int = 10):
 
 
 @torch.no_grad()
-def evaluate_model(model: nn.Module, args: argparse.Namespace):
+def evaluate_model(model: TimmFace, args: argparse.Namespace):
     model.eval()
     metrics = dict()
 
@@ -107,7 +127,7 @@ def evaluate_model(model: nn.Module, args: argparse.Namespace):
 
 
 def build_optim(
-    model: nn.Module,
+    model: TimmFace,
     optim: str,
     lr: float,
     weight_decay: float,
@@ -128,22 +148,32 @@ def build_optim(
         prefix_parts = prefix.split(".")
         return name_parts[: len(prefix_parts)] == prefix_parts
 
-    if param_groups is not None:
-        logger.info("Optimizer param groups:")
-        groups = []
-        for group in param_groups:
-            group = dict(group)  # shallow copy
-            params = [p for name, p in model.named_parameters() if _match_prefix(name, group["prefix"])]
-            logger.info(f"  - {group}: {sum(p.numel() for p in params):,} params")
-            group["params"] = params
-            groups.append(group)
+    # TODO: rethink this
+    # if param_groups is not None:
+    #     # TODO: no weight decay for bias/norm
+    #     # no weight decay for projection head and id weight, since they are before F.normalize()
+    #     logger.info("Optimizer param groups:")
+    #     groups = []
+    #     for group in param_groups:
+    #         group = dict(group)  # shallow copy
+    #         params = [p for name, p in model.named_parameters() if _match_prefix(name, group["prefix"])]
+    #         logger.info(f"  - {group}: {sum(p.numel() for p in params):,} params")
+    #         group["params"] = params
+    #         groups.append(group)
 
-        other_params = [p for p in model.parameters() if all(p not in set(group["params"]) for group in groups)]
-        logger.info(f"  - others: {sum(p.numel() for p in other_params):,} params")
-        groups.append(dict(prefix="others", params=other_params))
+    #     other_params = [p for p in model.parameters() if all(p not in set(group["params"]) for group in groups)]
+    #     logger.info(f"  - others: {sum(p.numel() for p in other_params):,} params")
+    #     groups.append(dict(prefix="others", params=other_params))
 
-    else:
-        groups = list(model.parameters())
+    # else:
+    #     groups = list(model.parameters())
+
+    no_wd_params = model.no_weight_decay_params()
+    other_params = [p for p in model.parameters() if p not in set(no_wd_params)]
+    groups = [
+        dict(prefix="no_wd", params=model.no_weight_decay_params()),
+        dict(prefix="others", params=other_params),
+    ]
 
     return optim_cls(groups, lr=lr, weight_decay=weight_decay, **kwargs)
 
@@ -186,10 +216,9 @@ def get_parser():
     parser.add_argument("--weight_decay", type=float, default=1e-3)
     parser.add_argument("--param_groups", nargs="+", type=json.loads)
     parser.add_argument("--optim_kwargs", type=json.loads, default=dict())
+    parser.add_argument("--lr_schedule_kwargs", type=json.loads, default=dict())
 
     parser.add_argument("--clip_grad_norm", type=float)
-    parser.add_argument("--warmup", type=float, default=0.05)
-    parser.add_argument("--decay_multiplier", type=float, default=0.01)
     parser.add_argument("--grad_accum", type=int, default=1)
 
     parser.add_argument("--run_name", default="debug")
@@ -200,7 +229,7 @@ def get_parser():
 if __name__ == "__main__":
     args = get_parser().parse_args()
     if args.model_dtype != torch.float32:
-        assert args.amp_dtype is None, "AMP should not be used when model is FP16/BF16"
+        assert args.amp_dtype is None, "AMP should not be used when using BF16 model"
     args.torch_version = torch.__version__
 
     # https://pytorch.org/tutorials/intermediate/ddp_tutorial.html
@@ -255,7 +284,6 @@ if __name__ == "__main__":
         reduce_first_conv_stride=args.reduce_first_conv_stride,
         partial_fc=args.partial_fc,
     )
-    # TODO: full BF16 is problematic. still investigate
     for p in model.parameters():
         p.data = p.detach().to(args.model_dtype)  # only cast params, don't cast buffers
     if args.activation_checkpointing:
@@ -272,7 +300,7 @@ if __name__ == "__main__":
         logger.info(f"  Head: {model.weight.numel():,}")
 
     optim = build_optim(model, args.optim, args.lr, args.weight_decay, args.param_groups, **args.optim_kwargs)
-    lr_schedule = CosineSchedule(args.lr, args.total_steps, warmup=args.warmup, decay_multiplier=args.decay_multiplier)
+    lr_schedule = LRSchedule(args.lr, args.total_steps, **args.lr_schedule_kwargs)
     step = 0
 
     if args.resume is not None and is_master:

@@ -6,7 +6,6 @@ from typing import NamedTuple
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from torchvision.transforms import v2
 
 from .utils import decode_img
 

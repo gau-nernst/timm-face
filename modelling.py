@@ -35,7 +35,25 @@ class TimmFace(nn.Module):
         self.loss = loss_lookup[loss](**(loss_kwargs or dict()))
         self.partial_fc = partial_fc
 
-    def forward(self, imgs: Tensor, labels: Tensor | None = None) -> Tensor:
+    def no_weight_decay_params(self):
+        # we do F.normalize() directly after these layers, so they don't need weight decay
+        params = [self.backbone.head.weight, self.weight]
+
+        # no weight decay for biases and norm params
+        for module in self.backbone.modules():
+            if isinstance(module, (nn.Linear, nn.modules.conv._ConvNd)):
+                params.append(module.bias)
+            elif isinstance(module, (nn.LayerNorm, nn.modules.batchnorm._NormBase)):
+                params.extend([module.weight, module.bias])
+
+        for name, param in self.backbone.named_parameters():
+            if name.endswith(".pos_embed"):
+                params.append(param)
+
+        params = [p for p in params if p is not None]
+        return params
+
+    def forward(self, imgs: Tensor, labels: Tensor | None = None):
         imgs = (imgs.float() - 127.5) / 127.5
         imgs = imgs.to(self.weight.dtype)
 
