@@ -28,11 +28,18 @@ def _get_dist_info(*, include_worker_info: bool = False):
     return rank, world_size
 
 
-def sync_rng_state(rng: torch.Generator):
-    if dist.is_initialized():
-        state = rng.get_state()
-        dist.broadcast(state, 0)
-        rng.set_state(state)
+def get_rng(seed: int | None):
+    rng = torch.Generator()
+    if seed is not None:
+        rng.manual_seed(seed)
+    else:
+        # seed from a true RNG source, then broadcast to all ranks
+        rng.seed()
+        if dist.is_initialized():
+            state = rng.get_state()
+            dist.broadcast(state, 0)
+            rng.set_state(state)
+    return rng
 
 
 class ShuffleDataset(IterableDataset):
@@ -40,9 +47,9 @@ class ShuffleDataset(IterableDataset):
         self.ds = ds
         self.buffer_size = buffer_size
 
-        self._generator = torch.Generator().manual_seed(seed)
-        self._buffer1 = []
-        self._buffer2 = []
+        self.rng = get_rng(seed)
+        self.buffer1 = []
+        self.buffer2 = []
 
     def __iter__(self):
         for sample in self.ds:
@@ -50,26 +57,25 @@ class ShuffleDataset(IterableDataset):
             # buffer2 should now be empty and buffer1 is full. we yield 1 sample from buffer1.
             # in subsequent iterations, we add 1 item to buffer2 and remove 1 item from buffer1,
             # thus maintaining the invariance that len(buffer1) + len(buffer2) = buffer_size - 1.
-            self._buffer2.append(sample)
-            if len(self._buffer2) == self.buffer_size:
-                self._buffer2 = self._shuffle(self._buffer2)
-                self._buffer1, self._buffer2 = self._buffer2, self._buffer1
+            self.buffer2.append(sample)
+            if len(self.buffer2) == self.buffer_size:
+                self.buffer2 = self._shuffle(self.buffer2)
+                self.buffer1, self.buffer2 = self.buffer2, self.buffer1
 
-            if len(self._buffer1):
-                yield self._buffer1.pop()
+            if len(self.buffer1):
+                yield self.buffer1.pop()
 
-        while len(self._buffer1):
-            yield self._buffer1.pop()
-        self._buffer2 = self._shuffle(self._buffer2)
-        while len(self._buffer2):
-            yield self._buffer2.pop()
+        while len(self.buffer1):
+            yield self.buffer1.pop()
+        self.buffer2 = self._shuffle(self.buffer2)
+        while len(self.buffer2):
+            yield self.buffer2.pop()
 
     def _shuffle(self, buffer: list):
-        indices = torch.randperm(len(buffer), generator=self._generator)
+        indices = torch.randperm(len(buffer), generator=self.rng)
         return [buffer[idx] for idx in indices]
 
 
-# NOTE: support resume correctly
 # https://github.com/facebookresearch/deit/blob/main/samplers.py
 # first introduced in Batch Augmentation https://arxiv.org/abs/1901.09335
 # also known as Repeated Augmentation in MultiGrain https://arxiv.org/abs/1902.05509
@@ -79,14 +85,13 @@ class RepeatedSampler(Sampler):
         self.dataset = dataset
         self.num_repeats = num_repeats
 
+        self.rng = get_rng()
         self.rank, self.world_size = _get_dist_info()
-        self.epoch = 0
         self.size_per_rank = len(dataset) * num_repeats // self.world_size
         self.total_size = self.size_per_rank * self.world_size
 
     def __iter__(self):
-        # deterministic sequence of data based on epoch idx
-        indices = torch.randperm(len(self.dataset), generator=torch.Generator().manual_seed(self.epoch))
+        indices = torch.randperm(len(self.dataset), generator=self.rng)
         indices = torch.repeat_interleave(indices, self.num_repeats).tolist()
         indices = indices[self.rank :: self.world_size][: self.size_per_rank]
         assert len(indices) == self.size_per_rank
@@ -94,6 +99,3 @@ class RepeatedSampler(Sampler):
 
     def __len__(self):
         return self.size_per_rank
-
-    def set_epoch(self, epoch: int):
-        self.epoch = epoch

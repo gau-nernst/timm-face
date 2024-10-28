@@ -10,7 +10,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import IterableDataset
 
-from .utils import _get_dist_info, decode_img, sync_rng_state
+from .utils import _get_dist_info, decode_img, get_rng
 
 logger = logging.getLogger(__name__)
 
@@ -33,16 +33,8 @@ class WebDataset(IterableDataset):
         self.transform = transform
         self.eval = eval
 
-        self._rng = torch.Generator()
-        if seed is not None:
-            # seed might be different for each rank
-            self._rng.manual_seed(seed)
-        else:
-            # if not provided, get seed from a true random source
-            # and broadcast state from rank 0 to the rest
-            self._rng.seed()
-            sync_rng_state(self._rng)
-        self._sess = None
+        self.rng = get_rng(seed)
+        self.sess = None
 
     @staticmethod
     def from_hf(repo_id: str, **kwargs) -> "WebDataset":
@@ -65,12 +57,12 @@ class WebDataset(IterableDataset):
         return WebDataset(shards, **kwargs)
 
     def _open_url(self, url: str):
-        if self._sess is None:
-            self._sess = requests.Session()
+        if self.sess is None:
+            self.sess = requests.Session()
             retries = requests.adapters.Retry(total=5, backoff_factor=0.1)
             http = requests.adapters.HTTPAdapter(max_retries=retries)
-            self._sess.mount("http://", http)
-            self._sess.mount("https://", http)
+            self.sess.mount("http://", http)
+            self.sess.mount("https://", http)
 
         headers = dict()
         if url.startswith("https://huggingface.co/datasets"):
@@ -78,12 +70,10 @@ class WebDataset(IterableDataset):
             if token is not None:
                 headers["Authorization"] = f"Bearer {token}"
 
-        # TODO: might use smaller timeout. add retry for timeout/broken connection.
-        # TODO: support local wds
-        resp = self._sess.get(
+        resp = self.sess.get(
             url,
             headers=headers,
-            timeout=30,
+            timeout=10,
             stream=True,
         )
         return tarfile.open(fileobj=resp.raw, mode="r|*")
@@ -97,7 +87,7 @@ class WebDataset(IterableDataset):
     def _shard_iter(self):
         while True:
             if not self.eval:
-                indices = torch.randperm(len(self.shards), generator=self._rng).tolist()
+                indices = torch.randperm(len(self.shards), generator=self.rng).tolist()
             else:
                 indices = list(range(len(self.shards)))
 
