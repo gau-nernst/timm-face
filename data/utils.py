@@ -28,6 +28,13 @@ def _get_dist_info(*, include_worker_info: bool = False):
     return rank, world_size
 
 
+def sync_rng_state(rng: torch.Generator):
+    if dist.is_initialized():
+        state = rng.get_state()
+        dist.broadcast(state, 0)
+        rng.set_state(state)
+
+
 class ShuffleDataset(IterableDataset):
     def __init__(self, ds: IterableDataset, buffer_size: int = 1000, seed: int = 2024) -> None:
         self.ds = ds

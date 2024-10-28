@@ -10,7 +10,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import IterableDataset
 
-from .utils import _get_dist_info, decode_img
+from .utils import _get_dist_info, decode_img, sync_rng_state
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ class WebDataset(IterableDataset):
         label_key: str = "cls",
         transform: Callable[[Tensor], Tensor] | None = None,
         eval: bool = True,
-        seed: int = 2024,
+        seed: int | None = None,
     ) -> None:
         self.shards = shards
         self.img_key = img_key
@@ -33,7 +33,15 @@ class WebDataset(IterableDataset):
         self.transform = transform
         self.eval = eval
 
-        self._rng = torch.Generator().manual_seed(seed)
+        self._rng = torch.Generator()
+        if seed is not None:
+            # seed might be different for each rank
+            self._rng.manual_seed(seed)
+        else:
+            # if not provided, get seed from a true random source
+            # and broadcast state from rank 0 to the rest
+            self._rng.seed()
+            sync_rng_state(self._rng)
         self._sess = None
 
     @staticmethod
@@ -89,9 +97,9 @@ class WebDataset(IterableDataset):
     def _shard_iter(self):
         while True:
             if not self.eval:
-                indices = torch.randperm(len(self.shards), generator=self._rng)
+                indices = torch.randperm(len(self.shards), generator=self._rng).tolist()
             else:
-                indices = range(len(self.shards))
+                indices = list(range(len(self.shards)))
 
             for idx in indices:
                 yield self.shards[idx]
